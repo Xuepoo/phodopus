@@ -21,4 +21,4 @@ lsonar.workspace = true
 
 [dev-dependencies]
 clap = { version = "4.6", features = ["cargo"] }
-rustyline = "14.0"
+rustyline = "17.0"
