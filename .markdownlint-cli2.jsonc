@@ -1,0 +1,29 @@
+{
+  "config": {
+    "default": true,
+    "MD013": false,
+    "MD024": { "siblings_only": true },
+    "MD025": {
+      "front_matter_title": "",
+    },
+    "MD033": false,
+    "MD041": false,
+  },
+  "globs": ["**/*.md"],
+  "ignores": [
+    ".git",
+    ".worktrees",
+    ".trash",
+    "node_modules",
+    "build",
+    "dist",
+    "site",
+    "_site",
+    "target",
+    "coverage",
+    "recording",
+    "util",
+    "COMPATIBILITY.md",
+    "CHANGELOG.md",
+  ],
+}

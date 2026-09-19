@@ -47,6 +47,7 @@ Originally forked from Catherine West's ([@kyren](https://github.com/kyren)) pio
 The garbage collection model is powered by [`gc-arena`](https://github.com/kyren/gc-arena). Phodopus features an incremental, cycle-detecting garbage collector with zero-cost `Gc` pointers that are machine-pointer sized and implement `Copy`.
 
 It achieves safety by combining:
+
 1. An unsafe `Collect` trait for tracing garbage-collected types, safely implemented via derive macros.
 2. Branding `Gc` pointers with unique, invariant "generative" lifetimes, ensuring pointers remain isolated to a single root arena.
 
@@ -56,7 +57,7 @@ It achieves safety by combining:
 
 In Phodopus, execution is organized in a "stackless" (trampoline) style. Lua callbacks can either produce an immediate result (value, coroutine yield, error) or return a `Sequence`. A `Sequence` behaves like a multi-step state machine that the parent `Executor` drives across mutation cycles:
 
-```
+```text
 [Host / Rust] -> [Lua Coroutine] -> [Rust Sequence] -> [Yielding Lua Code]
 ```
 
@@ -93,7 +94,7 @@ We honor the immense craftsmanship that went into Piccolo's stackless architectu
 
 Phodopus is dual-licensed under:
 
-* MIT license ([LICENSE-MIT](LICENSE-MIT) or <http://opensource.org/licenses/MIT>)
-* Creative Commons CC0 1.0 Universal Public Domain Dedication ([LICENSE-CC0](LICENSE-CC0) or <https://creativecommons.org/publicdomain/zero/1.0/>)
+- MIT license ([LICENSE-MIT](LICENSE-MIT) or <http://opensource.org/licenses/MIT>)
+- Creative Commons CC0 1.0 Universal Public Domain Dedication ([LICENSE-CC0](LICENSE-CC0) or <https://creativecommons.org/publicdomain/zero/1.0/>)
 
 at your option.

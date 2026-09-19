@@ -1,4 +1,5 @@
 ## [0.3.3]
+
 * Bugfix to not reset live threads held in upvalues of dead threads.
 
 ## [0.3.2]
@@ -57,48 +58,48 @@ always use it as a starting point for something better.
 Also includes a lot of quality of life API improvements, error message
 improvements, and more!
 
-- New `Executor` API that enables safe thread recursion and "tail resume" /
+* New `Executor` API that enables safe thread recursion and "tail resume" /
   "tail yield".
-- New `piccolo-util` crate with very commonly requested, useful features that
+* New `piccolo-util` crate with very commonly requested, useful features that
   are too opinionated or limited to belong in `piccolo` proper.
-- API changes to `Stack` to support a single, unified thread stack shared
+* API changes to `Stack` to support a single, unified thread stack shared
   between Lua and callbacks, similar to PUC-Rio Lua et al.
-- Upvalues no longer keep entire threads alive and instead use new gc-arena
+* Upvalues no longer keep entire threads alive and instead use new gc-arena
   finalization support to become closed when threads are garbage collected.
-- `IntoMultiValue` / `FromMultiValue` conversion for tuples now allows every
+* `IntoMultiValue` / `FromMultiValue` conversion for tuples now allows every
   element to be multi-converted rather than just the last element.
-- Support the `__eq` metamethod.
-- Error message improvements in lexer / parser errors (they now have line
+* Support the `__eq` metamethod.
+* Error message improvements in lexer / parser errors (they now have line
   numbers at least!).
-- API changes to second callback parameter, now an `Execution` type with `Fuel`
+* API changes to second callback parameter, now an `Execution` type with `Fuel`
   access *and* also calling thread information.
-- Add "chunk name" information to compiled chunks for future use in runtime
+* Add "chunk name" information to compiled chunks for future use in runtime
   errors / tracebacks.
-- Simplified `ctx` access, most methods are now directly implemented on `Context`.
-- Lots of type renames for clarity, `AnyCallback` -> `Callback`, `AnyUserData`
+* Simplified `ctx` access, most methods are now directly implemented on `Context`.
+* Lots of type renames for clarity, `AnyCallback` -> `Callback`, `AnyUserData`
   -> `UserData`, `AnyValue` -> `Any`, and others.
-- Add line number annotations to opcodes for future tracebacks.
-- Clean up general ptr handling and allow the user to access internal `Gc`
+* Add line number annotations to opcodes for future tracebacks.
+* Clean up general ptr handling and allow the user to access internal `Gc`
   pointers in all cases, allows for weak pointers to all pointer types.
 
 ## [0.2]
-- Allow `Thread` to be forcibly reset to a stopped state.
-- Improve the `Table` API, add functions that skip `IntoValue` conversion and
+* Allow `Thread` to be forcibly reset to a stopped state.
+* Improve the `Table` API, add functions that skip `IntoValue` conversion and
   simplify `Table::next`.
-- Support `__newindex`.
-- Auto conversion improvements, add a `Variadic` wrapper type to indicate
+* Support `__newindex`.
+* Auto conversion improvements, add a `Variadic` wrapper type to indicate
   variadic multi-values instead of bare arrays.
-- Add `Function::compose` and `Function::bind` for easier generic function
+* Add `Function::compose` and `Function::bind` for easier generic function
   handling from Rust.
-- Completely track used memory within interpreter instances. Tracks both
+* Completely track used memory within interpreter instances. Tracks both
   `gc-arena` allocated `Gc` pointers as well as all normal heap allocations
   using `gc-arena` external allocation tracking.
-- `Fuel` system to limit the execution time of Lua code.
-- Properly handle `...` in table constructors.
-- Implement `table.select('#')`, `table.pack`, and `table.unpack`.
-- Fix local function declarations to be visible in their own function body.
-- Guard against arbitrary recursion depth of callbacks (only ever a risk for
+* `Fuel` system to limit the execution time of Lua code.
+* Properly handle `...` in table constructors.
+* Implement `table.select('#')`, `table.pack`, and `table.unpack`.
+* Fix local function declarations to be visible in their own function body.
+* Guard against arbitrary recursion depth of callbacks (only ever a risk for
   Threads calling callbacks on *other* Threads, aka Lua coroutines).
 
 ## [0.1.1]
-- Initial crates.io release
+* Initial crates.io release

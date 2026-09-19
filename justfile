@@ -2,7 +2,7 @@
 
 default: check
 
-check: fmt-check typecheck clippy test
+check: fmt-check typecheck clippy test actionlint markdownlint
 
 fmt:
     cargo fmt --all
@@ -21,6 +21,9 @@ test:
 
 actionlint:
     actionlint .github/workflows/*.yml
+
+markdownlint:
+    markdownlint-cli2 "docs/**/*.md" "README.md" "AGENTS.md"
 
 # Publish a redacted CarryCtx snapshot inside this repo (commander merge
 # closeout only; never a git hook). `carryctx export --publication` redacts the
