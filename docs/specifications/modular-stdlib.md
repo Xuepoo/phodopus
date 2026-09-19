@@ -12,7 +12,7 @@ sidebar_order: 22
 
 # Modular Standard Library Specification
 
-> Status: Design **accepted** | Implementation: **partial** (baseline stdlib subsets present; authentic Lua patterns and string.format planned for Phase 1; utf8 implemented). This document defines the modular architecture, standard library implementations, authentic Lua pattern matching, and Unicode support for Phodopus.
+> Status: Design **accepted** | Implementation: **partial** (baseline stdlib subsets, utf8, and string.format implemented; authentic Lua patterns planned for Phase 1). This document defines the modular architecture, standard library implementations, authentic Lua pattern matching, and Unicode support for Phodopus.
 
 ---
 
@@ -75,14 +75,31 @@ lua.load_utf8()?;
 
 The `string.format` implementation supports standard Lua formatting specifiers:
 
-- `%c`: Single character from integer byte code.
-- `%d`, `%i`: Signed integer format.
-- `%o`, `%u`, `%x`, `%X`: Unsigned octal, decimal, and hexadecimal.
-- `%f`, `%e`, `%E`, `%g`, `%G`: Floating point formats.
-- `%s`: String conversion (respecting embedded null bytes).
-- `%q`: Quoted string suitable for Lua source deserialization.
+- `%c`: Single byte character from integer code point.
+- `%d`, `%i`: Signed decimal integer format. Handles `math.mininteger` (`i64::MIN`) safely without overflow panics.
+- `%o`, `%u`, `%x`, `%X`: Unsigned octal, decimal, and hexadecimal formats.
+- `%f`: Decimal floating point format.
+- `%e`, `%E`: Scientific notation floating point formats (lowercase and uppercase).
+- `%g`, `%G`: Compact floating point formats (switching between decimal and scientific based on exponent and precision).
+- `%a`, `%A`: Hexadecimal floating point formats using the `fhex` crate (`fhex::ToHex`).
+- `%s`: String conversion (formats strings, numbers, booleans, nil, and calls `__tostring` on objects when available).
+- `%q`: Quoted string safely escaped for Lua syntax deserialization (`\n`, `\r`, `"`, `\\`, `\0`, and control characters).
+- `%p`: Pointer representation formatted as hexadecimal address (`0x...`) using the underlying garbage-collected object address.
+- `%%`: Escaped literal percent sign.
 
-**Safety Constraint**: To prevent memory bomb attacks via `%999999999s`, width specifiers are capped at an implementation bound of 64 KiB per field.
+Flags, width, and precision modifiers:
+
+- `-`: Left-adjust within the given field width.
+- `+`: Always show sign (`+` or `-`) for signed numeric conversions.
+- `' '` (space): Precede non-negative signed numbers with a space.
+- `#`: Alternate form (prefix `0x`/`0X` for hex, force decimal point for floats, retain trailing zeros for `%g`/`%G`).
+- `0`: Zero-padding to field width (ignored if `-` flag is present or when precision is specified on integers).
+
+**Safety & Buffering Constraints**:
+
+- Maximum field width is bounded to 1000 characters to prevent memory-bomb attacks (e.g. `%999999999s`).
+- Maximum precision is bounded to 1000 digits.
+- Specifiers exceeding bounds or containing invalid syntax trigger format errors.
 
 ### 4.2 Authentic Lua Pattern Matching
 
