@@ -9,10 +9,10 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.3.3"
+version = "0.1.0-alpha.1"
 edition = "2021"
 authors = ["kyren <catherine@kyju.org>", "The Bitty Terminal Developers"]
-license = "MIT"
+license = "MIT OR CC0-1.0"
 repository = "https://github.com/bitty-terminal/phodopus"
 
 [workspace.dependencies]
@@ -25,5 +25,5 @@ rand = { version = "0.9", features = ["small_rng"] }
 serde = "1.0"
 thiserror = "2.0"
 
-phodopus = { path = "crates/phodopus", version = "0.3.3" }
-phodopus-util = { path = "crates/phodopus-util", version = "0.3.3" }
+phodopus = { path = "crates/phodopus", version = "0.1.0-alpha.1" }
+phodopus-util = { path = "crates/phodopus-util", version = "0.1.0-alpha.1" }

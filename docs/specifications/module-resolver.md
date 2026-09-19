@@ -4,14 +4,15 @@ description: Normative specification for sandboxed module loading, searcher chai
 category: specifications
 audience: developers
 document_type: specification
-status: accepted
+design_status: accepted
+implementation_status: planned
 website_publish: true
 sidebar_order: 23
 ---
 
 # Module Resolver Specification
 
-> Status: **accepted**. This document defines the sandboxed module loading architecture, searcher chains, and capability-constrained filesystem resolvers for `require` in Phodopus.
+> Status: Design **accepted** | Implementation: **planned** (scheduled for Phase 2). This document defines the sandboxed module loading architecture, searcher chains, and capability-constrained filesystem resolvers for `require` in Phodopus.
 
 ---
 

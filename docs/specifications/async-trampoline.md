@@ -4,14 +4,15 @@ description: Normative specification for runtime-agnostic asynchronous operation
 category: specifications
 audience: developers
 document_type: specification
-status: accepted
+design_status: accepted
+implementation_status: planned
 website_publish: true
 sidebar_order: 24
 ---
 
 # Async Trampoline Specification
 
-> Status: **accepted**. This document defines the host-agnostic asynchronous suspension protocol, waker-less VM execution, and coroutine resumption trampolines for Phodopus.
+> Status: Design **accepted** | Implementation: **planned** (scheduled for Phase 4; current runtime uses prototype NOOP waker). This document defines the host-agnostic asynchronous suspension protocol, waker-less VM execution, and coroutine resumption trampolines for Phodopus.
 
 ---
 

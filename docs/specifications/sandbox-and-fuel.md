@@ -4,14 +4,15 @@ description: Normative specification for instruction Fuel budgeting, hard memory
 category: specifications
 audience: developers
 document_type: specification
-status: accepted
+design_status: accepted
+implementation_status: partial
 website_publish: true
 sidebar_order: 21
 ---
 
 # Sandbox & Fuel Specification
 
-> Status: **accepted**. This document defines the normative resource bounding, instruction Fuel budgeting, and hard memory quota contracts for Phodopus.
+> Status: Design **accepted** | Implementation: **partial** (Fuel instruction budgeting implemented; hard heap allocation quotas planned). This document defines the normative resource bounding, instruction Fuel budgeting, and hard memory quota contracts for Phodopus.
 
 ---
 

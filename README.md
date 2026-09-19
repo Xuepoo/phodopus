@@ -6,7 +6,7 @@
 
 **Phodopus** is a pure-Rust, stackless Lua runtime designed for uncompromising sandboxing, deterministic execution, and predictable resource bounds.
 
-Originally forked from Catherine West's ([@kyren](https://github.com/kyren)) pioneering work on [Piccolo](https://github.com/kyren/piccolo), Phodopus preserves all original commit history and licensing while advancing the runtime into a production-grade, modular embedded engine.
+Originally forked from Catherine West's ([@kyren](https://github.com/kyren)) pioneering work on [Piccolo](https://github.com/kyren/piccolo), Phodopus preserves all original commit history and licensing while advancing the runtime into a production-grade, modular embedded engine. Project SemVer begins afresh at `0.1.0-alpha.1` towards `0.1.0`, anchored on the upstream Piccolo `0.3.3` lineage baseline.
 
 ---
 
@@ -16,14 +16,24 @@ Originally forked from Catherine West's ([@kyren](https://github.com/kyren)) pio
 
 ---
 
-## Core Pillars
+## Current Capabilities (Today)
 
-1. **Pure Rust & Memory Safe**: Zero C dependencies, no `longjmp`, and isolated `unsafe` blocks audited for sound generative lifetime branding.
-2. **Stackless & Preemptible**: The VM does not rely on the Rust call stack for Lua execution. Coroutines, callbacks, and tail calls trampoline through non-blocking `Sequence` steps, immune to deep recursion stack overflow.
-3. **Deterministic Fuel & Sandboxing**: Fine-grained instruction budgeting ("Fuel") guarantees timely preemption and protection against infinite loops or untrusted script DoS.
-4. **Microsecond Cold Starts & Tiny Footprint**: Starts in ~35 µs with an initial heap footprint of only ~11 KB, making it ideal for thousands of concurrent sandboxed tasks.
-5. **Modular Standard Library**: Standard libraries are decoupled and capability-gated: core VM, strings (with authentic Lua patterns and formatting), UTF-8, tables, math, and sandboxed module loading (`require`).
-6. **Host-Agnostic Async Suspension**: The VM does not mandate Tokio or any specific async runtime in its core. Asynchronous operations yield typed host suspension descriptors (`HostOp::Pending`), driven externally by host schedulers via trampolines.
+1. **Pure Rust & Memory Safe**: Zero C dependencies, no `longjmp`, using `gc-arena` for generative lifetime-branded GC pointer safety.
+2. **Stackless & Preemptible VM**: Execution state is heap-allocated in the GC arena. Coroutines, callbacks, and tail calls trampoline through non-blocking `Sequence` steps without consuming native Rust stack frames.
+3. **Deterministic Fuel Metering**: Fine-grained instruction budgeting ("Fuel") allows pausing or terminating runaway execution loops.
+4. **Microsecond Cold Starts & Tiny Footprint**: Starts in ~35 µs with an initial heap footprint of only ~11 KB.
+5. **Baseline Lua 5.4 Subsets**: Supports core Lua 5.4 syntax, arithmetic/bitwise operators, closures, coroutines, metatables, and basic stdlib modules (`base`, `coroutine`, `math`, `string`, `table`, `io`).
+
+---
+
+## Target Architecture (In Development)
+
+1. **Hard Memory Quotas**: Explicit maximum heap allocation limits enforced directly on the runtime allocator, returning errors or triggering GC before out-of-memory.
+2. **Authentic Pattern Matching & Formatting**: Native Lua pattern matching engine (`find`, `match`, `gsub`) and robust `string.format` support (Phase 1).
+3. **UTF-8 Standard Library**: Standard Lua 5.4 `utf8` library module support.
+4. **Diagnostic Tracebacks**: Bytecode-mapped source locations and backtrace generation on error.
+5. **Sandboxed Module Resolution**: Capability-constrained VFS resolvers, pluggable searcher chains, and embedded preloaded modules for `require`.
+6. **Host-Agnostic Async Suspension**: Non-blocking host suspension descriptors (`HostOp::Pending`) decoupled from specific async runtimes (Tokio/smol/async-std).
 
 ---
 

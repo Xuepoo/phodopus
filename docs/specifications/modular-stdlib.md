@@ -4,14 +4,15 @@ description: Normative specification for capability-gated standard libraries, Lu
 category: specifications
 audience: developers
 document_type: specification
-status: accepted
+design_status: accepted
+implementation_status: partial
 website_publish: true
 sidebar_order: 22
 ---
 
 # Modular Standard Library Specification
 
-> Status: **accepted**. This document defines the modular architecture, standard library implementations, authentic Lua pattern matching, and Unicode support for Phodopus.
+> Status: Design **accepted** | Implementation: **partial** (baseline stdlib subsets present; authentic Lua patterns, string.format, and utf8 planned for Phase 1). This document defines the modular architecture, standard library implementations, authentic Lua pattern matching, and Unicode support for Phodopus.
 
 ---
 

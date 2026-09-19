@@ -19,6 +19,9 @@ clippy:
 test:
     cargo test --workspace --all-targets
 
+msrv:
+    cargo +1.85 check --workspace --all-targets
+
 actionlint:
     actionlint .github/workflows/*.yml
 

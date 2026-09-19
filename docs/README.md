@@ -37,6 +37,7 @@ The documentation is organized into focused topic trees:
 | :--- | :--- | :--- |
 | [Architecture](architecture/README.md) | Pure-Rust VM execution model, `gc-arena` cycle collection, stackless trampolines, and the 6-phase roadmap. | Active |
 | [Specifications](specifications/README.md) | Concrete contracts: Fuel & sandboxing, modular stdlib (`string.format`, Lua patterns, `utf8`), module resolver (`require`), and host async bridge. | Active |
+| [Security](security/README.md) | Sandbox threat model, isolation guarantees, host callback boundaries, and resource limits. | Active |
 | [Development](development/README.md) | Documentation spines, engineering lifecycle, toolchain policies (Rust 1.98.1, MSRV 1.85), and CI verification. | Active |
 
 ---
@@ -47,9 +48,11 @@ The documentation is organized into focused topic trees:
 | :--- | :--- | :--- | :--- |
 | [Architecture Overview](architecture/overview.md) | Architecture | Accepted | Stackless VM design, zero-cost `Gc` pointers with generative lifetimes, and host trampoline loops. |
 | [Evolution Roadmap](architecture/roadmap.md) | Architecture | Accepted | Six-phase roadmap from Piccolo baseline fork to production sandbox runtime. |
-| [Sandbox & Fuel Specification](specifications/sandbox-and-fuel.md) | Specification | Accepted | Deterministic instruction budgeting, preemption thresholds, and hard heap allocation ceilings. |
-| [Modular Standard Library Specification](specifications/modular-stdlib.md) | Specification | Accepted | Capability-gated stdlib: formatting, authentic Lua patterns, UTF-8 code points, and table helpers. |
-| [Module Resolver Specification](specifications/module-resolver.md) | Specification | Accepted | Sandboxed `require` searcher chains, preloaded modules, and capability VFS resolvers. |
-| [Async Trampoline Specification](specifications/async-trampoline.md) | Specification | Accepted | Host-agnostic async suspension protocol (`HostOp::Pending`) without Tokio VM coupling. |
+| [Garbage Collector Strategy](architecture/gc-strategy.md) | Architecture | Accepted | Dependency pinning, memory accounting evolution, and hard quota strategy for `gc-arena`. |
+| [Sandbox & Fuel Specification](specifications/sandbox-and-fuel.md) | Specification | Partial | Deterministic instruction budgeting, preemption thresholds, and hard heap allocation ceilings. |
+| [Modular Standard Library Specification](specifications/modular-stdlib.md) | Specification | Partial | Capability-gated stdlib: formatting, authentic Lua patterns, UTF-8 code points, and table helpers. |
+| [Module Resolver Specification](specifications/module-resolver.md) | Specification | Planned | Sandboxed `require` searcher chains, preloaded modules, and capability VFS resolvers. |
+| [Async Trampoline Specification](specifications/async-trampoline.md) | Specification | Planned | Host-agnostic async suspension protocol (`HostOp::Pending`) without Tokio VM coupling. |
+| [Threat Model & Trust Boundaries](security/threat-model.md) | Policy | Accepted | Defensive boundaries, host callback trust boundaries, and panic containment. |
 | [Documentation Workflow](development/documentation-workflow.md) | Guide | Accepted | Section spines, review sign-off gates, and document maintenance workflow. |
 | [Toolchain Policy](development/toolchain-policy.md) | Policy | Accepted | Rust 1.98.1 toolchain, MSRV 1.85, Clippy lint configurations, and justfile gates. |
