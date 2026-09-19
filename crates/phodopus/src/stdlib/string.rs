@@ -1,6 +1,7 @@
 use crate::{Callback, CallbackReturn, Context, FromValue, IntoValue, String, Table, Value};
 
 mod format;
+mod patterns;
 
 pub fn load_string<'gc>(ctx: Context<'gc>) {
     let string = Table::new(&ctx);
@@ -121,6 +122,8 @@ pub fn load_string<'gc>(ctx: Context<'gc>) {
             Ok(CallbackReturn::Return)
         }),
     );
+
+    patterns::load_patterns(ctx, &string);
 
     ctx.set_global("string", string);
 }

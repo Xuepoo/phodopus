@@ -25,6 +25,7 @@ hashbrown = { version = "0.14", features = ["raw"] }
 rand = { version = "0.9", features = ["small_rng"] }
 serde = "1.0"
 thiserror = "2.0"
+lsonar = "0.2.4"
 
 phodopus = { path = "crates/phodopus", version = "0.1.0-alpha.1" }
 phodopus-util = { path = "crates/phodopus-util", version = "0.1.0-alpha.1" }
