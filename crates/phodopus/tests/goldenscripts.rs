@@ -175,8 +175,12 @@ fn test_goldenscripts() {
         let compile_result = lua.try_enter(|ctx| {
             let chunk_name = path
                 .strip_prefix(env!("CARGO_MANIFEST_DIR"))
-                .map(|p| format!("./{}", p.display()))
-                .unwrap_or_else(|_| path.to_string_lossy().to_string());
+                .map(|p| {
+                    let s = p.to_string_lossy().replace('\\', "/");
+                    let s = s.trim_start_matches('/');
+                    format!("./{s}")
+                })
+                .unwrap_or_else(|_| path.to_string_lossy().replace('\\', "/"));
             let closure = Closure::load(ctx, Some(&chunk_name), &source)?;
             Ok(ctx.stash(closure))
         });
