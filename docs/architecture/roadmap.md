@@ -25,7 +25,7 @@ sidebar_order: 12
                                |
                                v
 +-----------------------------------------------------------------+
-| Phase 1: Upstream PR Review & Absorption             [UPCOMING] |
+| Phase 1: Upstream PR Review & Absorption            [COMPLETED] |
 | - PR #128 (format), #129 (patterns), #110 (utf8), #121 (trace)  |
 +-----------------------------------------------------------------+
                                |
@@ -68,20 +68,20 @@ sidebar_order: 12
 - [x] Initialize CarryCtx governance (`.carryctx/`), publish initial snapshot ref `refs/heads/carryctx-snapshots`.
 - [x] Verify green baseline gates: 100% tests pass on `just check`.
 
-### Phase 1: Upstream Community PR Review & Absorption
+### Phase 1: Upstream Community PR Review & Absorption (Completed)
 
 Upstream Piccolo has valuable, mature pull requests that solve core runtime gaps:
 
-1. **PR #128: `string.format` Implementation**:
-   - Implement standard Lua string formatting (`%s`, `%d`, `%x`, `%f`, `%q`).
-   - Prevent unbounded memory expansion during format buffering.
-2. **PR #129: Native Lua Pattern Matching**:
-   - Incorporate authentic Lua pattern matching (`string.find`, `string.match`, `string.gsub`, `string.gmatch`).
-   - Reject generic regex crate mapping in favor of pure Lua pattern syntax (character classes `%a`, `%d`, magic characters `^$()%.[]*+-?`, frontiers `%f`).
-3. **PR #110: `utf8` Standard Library**:
-   - Add standard Lua 5.3/5.4 `utf8` library (`utf8.char`, `utf8.codes`, `utf8.codepoint`, `utf8.len`, `utf8.offset`).
-4. **PR #121: Backtrace & Source Diagnostics**:
-   - Enhanced stack frame introspection and line-number error reporting via `debug.traceback`.
+- [x] **PR #128: `string.format` Implementation**:
+  - Implement standard Lua string formatting (`%s`, `%d`, `%x`, `%f`, `%q`).
+  - Prevent unbounded memory expansion during format buffering.
+- [x] **PR #129: Native Lua Pattern Matching**:
+  - Incorporate authentic Lua pattern matching (`string.find`, `string.match`, `string.gsub`, `string.gmatch`).
+  - Reject generic regex crate mapping in favor of pure Lua pattern syntax (character classes `%a`, `%d`, magic characters `^$()%.[]*+-?`, frontiers `%f`).
+- [x] **PR #110: `utf8` Standard Library**:
+  - Add standard Lua 5.3/5.4 `utf8` library (`utf8.char`, `utf8.codes`, `utf8.codepoint`, `utf8.len`, `utf8.offset`).
+- [x] **PR #121: Backtrace & Source Diagnostics**:
+  - Enhanced stack frame introspection and line-number error reporting via `debug.traceback`.
 
 ### Phase 2: Sandboxed Module System (`require`)
 

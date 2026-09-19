@@ -173,7 +173,15 @@ fn test_goldenscripts() {
         });
 
         let compile_result = lua.try_enter(|ctx| {
-            let closure = Closure::load(ctx, Some(path.to_string_lossy().as_ref()), &source)?;
+            let chunk_name = path
+                .strip_prefix(env!("CARGO_MANIFEST_DIR"))
+                .map(|p| {
+                    let s = p.to_string_lossy().replace('\\', "/");
+                    let s = s.trim_start_matches('/');
+                    format!("./{s}")
+                })
+                .unwrap_or_else(|_| path.to_string_lossy().replace('\\', "/"));
+            let closure = Closure::load(ctx, Some(&chunk_name), &source)?;
             Ok(ctx.stash(closure))
         });
         let (closure, compile_error) = match compile_result {
@@ -214,7 +222,7 @@ fn test_goldenscripts() {
                     continue;
                 }
                 if let Some(error) = run_error {
-                    eprintln!("{path:?}: expected script to pass, but it threw and error at runtime\nerror: {error}");
+                    eprintln!("{path:?}: expected script to pass, but it threw an error at runtime\nerror: {error:#}");
                     failed_scripts.push(path);
                     continue;
                 }
