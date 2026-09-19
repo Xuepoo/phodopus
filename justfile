@@ -23,7 +23,7 @@ actionlint:
     actionlint .github/workflows/*.yml
 
 markdownlint:
-    markdownlint-cli2 "docs/**/*.md" "README.md" "AGENTS.md"
+    markdownlint-cli2 "docs/**/*.md" "README.md" "AGENTS.md" "crates/**/*.md"
 
 # Publish a redacted CarryCtx snapshot inside this repo (commander merge
 # closeout only; never a git hook). `carryctx export --publication` redacts the

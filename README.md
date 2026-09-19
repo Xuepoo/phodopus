@@ -27,6 +27,16 @@ Originally forked from Catherine West's ([@kyren](https://github.com/kyren)) pio
 
 ---
 
+## Workspace Structure
+
+The repository is structured as a standard multi-crate virtual workspace under `crates/`:
+
+- [`crates/phodopus`](crates/phodopus): Core runtime crate containing the virtual machine, compiler, fuel accounting, and standard library.
+- [`crates/phodopus-util`](crates/phodopus-util): Ergonomic integration helpers (`freeze`, Serde support, userdata binders).
+- [`docs/`](docs): Canonical documentation corpus (architecture, specifications, and development guides).
+
+---
+
 ## Roadmap & Evolution
 
 - [x] **Phase 0: Baseline & Lineage Preservation**: Fork Piccolo with complete Git history, MIT/CC0 attribution, upstream remote tracking, and verified green quality gates.

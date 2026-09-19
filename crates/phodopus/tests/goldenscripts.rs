@@ -106,13 +106,13 @@ enum GoldenScriptMode {
 
 #[test]
 fn test_goldenscripts() {
-    const DIR: &str = "./tests/goldenscripts";
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/goldenscripts");
     let mut failed_scripts: Vec<PathBuf> = Vec::new();
-    eprintln!("running all goldenscripts in {DIR:?}");
+    eprintln!("running all goldenscripts in {dir:?}");
 
     let (tx, rx) = channel();
 
-    let files = read_dir(DIR)
+    let files = read_dir(&dir)
         .and_then(|e| e.collect::<Result<Vec<_>, _>>())
         .expect("could not list dir contents");
 

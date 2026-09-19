@@ -1,11 +1,11 @@
 [workspace]
 resolver = "2"
 members = [
-    "util",
+    "crates/*",
 ]
 default-members = [
-    ".",
-    "util",
+    "crates/phodopus",
+    "crates/phodopus-util",
 ]
 
 [workspace.package]
@@ -25,27 +25,5 @@ rand = { version = "0.9", features = ["small_rng"] }
 serde = "1.0"
 thiserror = "2.0"
 
-phodopus = { path = "./", version = "0.3.3" }
-
-[package]
-name = "phodopus"
-description = "Stackless Lua VM implemented in pure Rust (Piccolo successor with sandbox, fuel, and modular stdlib)"
-readme = "README.md"
-version.workspace = true
-edition.workspace = true
-authors.workspace = true
-license.workspace = true
-repository.workspace = true
-
-[dependencies]
-ahash.workspace = true
-allocator-api2.workspace = true
-anyhow.workspace = true
-gc-arena.workspace = true
-hashbrown.workspace = true
-rand.workspace = true
-thiserror.workspace = true
-
-[dev-dependencies]
-clap = { version = "4.5", features = ["cargo"] }
-rustyline = "14.0"
+phodopus = { path = "crates/phodopus", version = "0.3.3" }
+phodopus-util = { path = "crates/phodopus-util", version = "0.3.3" }

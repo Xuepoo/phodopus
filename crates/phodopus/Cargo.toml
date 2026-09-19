@@ -1,0 +1,22 @@
+[package]
+name = "phodopus"
+description = "Stackless Lua VM implemented in pure Rust (Piccolo successor with sandbox, fuel, and modular stdlib)"
+readme = "README.md"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+ahash.workspace = true
+allocator-api2.workspace = true
+anyhow.workspace = true
+gc-arena.workspace = true
+hashbrown.workspace = true
+rand.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+clap = { version = "4.6", features = ["cargo"] }
+rustyline = "14.0"

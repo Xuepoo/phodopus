@@ -18,12 +18,13 @@ fn run_lua_code(name: &str, code: &[u8]) -> Result<(), ExternError> {
     Ok(())
 }
 
-fn run_tests(dir: &str) -> bool {
+fn run_tests(dir: impl AsRef<std::path::Path>) -> bool {
+    let dir = dir.as_ref();
     let _ = writeln!(stdout(), "running all test scripts in {dir:?}");
 
     let mut file_failed = false;
-    for dir in read_dir(dir).expect("could not list dir contents") {
-        let path = dir.expect("could not read dir entry").path();
+    for entry in read_dir(dir).expect("could not list dir contents") {
+        let path = entry.expect("could not read dir entry").path();
         if let Some(ext) = path.extension() {
             if ext == "lua" {
                 let mut file = io::buffered_read(File::open(&path).unwrap()).unwrap();
@@ -48,12 +49,13 @@ fn run_tests(dir: &str) -> bool {
 #[test]
 fn test_scripts() {
     let mut file_failed = false;
+    let base = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
-    file_failed |= run_tests("./tests/scripts");
+    file_failed |= run_tests(base.join("tests/scripts"));
 
     let _ = writeln!(stdout(), "Running non-required tests");
 
-    let non_required_failed = run_tests("./tests/scripts-wishlist");
+    let non_required_failed = run_tests(base.join("tests/scripts-wishlist"));
 
     if non_required_failed {
         let _ = writeln!(stdout(), "one or more non-required tests failed");
