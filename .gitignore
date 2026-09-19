@@ -11,3 +11,4 @@
 .#*
 .dir-locals.el
 /.direnv/
+.worktrees/

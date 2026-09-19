@@ -8,7 +8,7 @@
   repositories own their own Git, CarryCtx, CI, releases, and agent guidance.
 - Lineage & Attribution: `Phodopus` is the pure-Rust stackless Lua successor
   runtime forked from [`kyren/piccolo`](https://github.com/kyren/piccolo).
-  All upstream commit history, copyright attributions, and MIT/CC0 licenses
+  All upstream commit history, copyright attributions, and dual MIT/CC0 licenses
   are strictly preserved. Upstream remote is tracked at
   `https://github.com/kyren/piccolo.git`.
 - Canonical planning and design records originate in the research corpus
@@ -19,13 +19,70 @@
 
 ## Current phase
 
-- Phase 0: Baseline fork initialized, repo identity and workspace integration
-  established, quality gates passing cleanly.
-- Approaching Phase 1: Review and absorb mature upstream Piccolo PRs
+- Phase 0: Baseline fork initialized, repo identity, CarryCtx configuration, and
+  workspace integration established; quality gates passing cleanly.
+- Approaching Phase 1: Review and absorb mature upstream Piccolo community PRs
   (#128 `string.format`, #129 Lua pattern matching, #110 `utf8`, #121 `traceback`
   stack diagnostics).
 - Do not introduce Bitty-specific abstractions or hardcoded async runtime
   assumptions into the VM core.
+
+## Read before acting
+
+1. Read this guide and the applicable files in `.carryctx/rules/`.
+2. Adopt the assigned persona in `.carryctx/personas/`.
+3. Read the task, team context, exact scopes, dependencies, and relevant
+   governance contracts before modifying code or configurations.
+
+## CarryCtx workflow
+
+- CarryCtx is the durable execution record; it does not spawn agents.
+- Bind a named agent and session to the task before work. Record progress,
+  decisions, risks, blockers, handoffs, and checkpoints while work is active.
+- Map GitHub Issue intent to a CarryCtx task; repository ownership to a team;
+  ordering to dependencies; edits to exact scopes; active work to a session;
+  and recovery points to checkpoints.
+- Fresh clones restore the local CarryCtx DB from the in-repo snapshot branch
+  with `just workflow-import` (validate-only: `just workflow-import-dry`). It
+  fetches `refs/heads/carryctx-snapshots`, refuses to replace a non-empty local
+  DB without `--force`, and prints provenance.
+- Merge closeout publishes the in-repo snapshot via `just workflow-publish`
+  (dry-run: `just workflow-publish-dry`), which commits a redacted export to
+  `refs/heads/carryctx-snapshots` and pushes it to `origin`.
+
+## Delivery lifecycle
+
+- Normal lifecycle: GitHub Issue -> CarryCtx task -> team/dependencies/scopes ->
+  named session -> isolated worktree and branch -> coherent commits -> pull request ->
+  independent review + CI -> squash merge -> snapshot publication -> task completion -> Issue closure.
+- After initialization, parallel implementation uses dedicated worktrees and
+  branches. Branches follow `ctx-XXXX/<type>-<short-slug>` where `XXXX` is the
+  owning CarryCtx task number, `<type>` is `feat|fix|chore|docs`, and the slug is
+  kebab-case (e.g. `ctx-0001/feat-lua-patterns`); worktrees live at
+  `.worktrees/ctx-XXXX-<type>-<short-slug>` with `/` mapped to `-`.
+- One branch per task; commander housekeeping branches may use `cmd/<slug>`.
+- Do not commit, push, merge, publish, or mutate remote state without explicit
+  authorization from the user or owning task.
+
+### GitHub hygiene (labels and milestones)
+
+- Every GitHub Issue and PR carries labels (`feat`/`fix`/`docs`/`chore` +
+  `P0`/`P1`/`P2` + `area:*`) and milestone (`v0.1.0`), created with
+  `gh issue create --label ... --milestone ...` and kept in sync via `gh issue edit`
+  or `gh pr edit`.
+- Every task description and PR body includes:
+  `Priority: ... | Area: ... | Labels: ... | Milestone: ... | Task: CTX-XXXX`.
+- Merge method: squash merges only (`gh pr merge --squash --delete-branch`).
+
+### Quality gates before push (mandatory)
+
+- Before pushing any branch: run repository justfile gates locally:
+  - `just check` (runs `fmt-check`, `typecheck`, `clippy`, `test`)
+  - `just fmt` (formats Rust code with `cargo fmt`)
+  - `just actionlint` (validates all `.github/workflows/*.yml` files)
+- Toolchain: pinned to Rust 1.98.1 (`rust-toolchain.toml`), MSRV 1.85
+  (`clippy.toml`).
+- All tests must pass before proposing or merging any changes.
 
 ## Architectural boundaries
 
@@ -39,21 +96,7 @@
   instruction Fuel, and boundable by hard memory quotas.
 - **Native Lua Patterns**: String pattern matching implements authentic Lua
   patterns (via PR #129 adaptation) rather than generic Rust regex syntax.
-
-## Quality gates
-
-- Always run quality gates via the repository `justfile`:
-  - `just check` (runs `fmt-check`, `typecheck`, `clippy`, `test`)
-  - `just fmt` (formats Rust code with `cargo fmt`)
-- Toolchain: pinned to Rust 1.98.1 (`rust-toolchain.toml`), MSRV 1.85
-  (`clippy.toml`).
-- All tests must pass before proposing or merging any changes.
-
-## Engineering discipline
-
 - **No Hardcoded Values**: Never hardcode host/environment values: absolute
   paths, user home directories, hostnames, ports, credentials.
-- **Language**: English-only for all code, comments, Markdown documentation,
-  commit messages, and issue descriptions.
-- **Git Hygiene**: Keep Git history clean, logical, and traceable to specific
-  tasks or upstream PR references.
+- **Documentation Language**: English-only for all code, comments, Markdown
+  documentation, commit messages, and issue descriptions.

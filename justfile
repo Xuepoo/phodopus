@@ -19,5 +19,26 @@ clippy:
 test:
     cargo test --workspace --all-targets
 
+actionlint:
+    actionlint .github/workflows/*.yml
+
+# Publish a redacted CarryCtx snapshot inside this repo (commander merge
+# closeout only; never a git hook). `carryctx export --publication` redacts the
+# bundle, stamps manifest.redacted, and commits one snapshot to the fixed ref
+# `refs/heads/carryctx-snapshots`.
+workflow-publish *args:
+    bash scripts/workflow-publish.sh {{args}}
+
+workflow-publish-dry *args:
+    bash scripts/workflow-publish.sh --dry-run {{args}}
+
+# Restore the local CarryCtx DB from the in-repo snapshot branch
+# `refs/heads/carryctx-snapshots` (fresh-clone recipe).
+workflow-import *args:
+    bash scripts/workflow-import.sh {{args}}
+
+workflow-import-dry *args:
+    bash scripts/workflow-import.sh --dry-run {{args}}
+
 clean:
     cargo clean
