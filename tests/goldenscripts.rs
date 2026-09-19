@@ -155,7 +155,7 @@ fn test_goldenscripts() {
                 .strip_prefix("--- ")
                 .or_else(|| line.strip_prefix("---"))
             {
-                expected_output.push_str(str);
+                expected_output.push_str(&str.replace("\r\n", "\n"));
                 line.clear();
             } else {
                 break;
