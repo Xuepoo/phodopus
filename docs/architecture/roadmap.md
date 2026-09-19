@@ -116,3 +116,4 @@ Upstream Piccolo has valuable, mature pull requests that solve core runtime gaps
   - Spatial and semantic command registry bindings (`bitty.command`).
   - Sandboxed plugin file storage (`bitty.fs`).
 - Deploy Phodopus as the primary runtime engine for non-AI Lua plugins and workspace scripting.
+- The host-boundary contract this phase depends on is recorded in the [Bitty Host ABI Boundary](../integration/bitty-host-abi.md).
