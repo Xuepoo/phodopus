@@ -91,14 +91,14 @@ likely not be implemented due to differences between piccolo and PUC-Lua.
 | ------ | --------------------------------- | ----------- | ----- |
 | 🔵   | `byte(s[, i, j])`                 |             |       |
 | 🔵   | `char(args...)`                   |             |       |
-| ⚫️️   | `dump(function[, strip])`         |             |       |
-| ⚫️️   | `find(s, pattern[, init, plain])` |             |       |
-| 🔵   | `format(formatstring, args...)`   |             |       |
-| ⚫️️   | `gmatch(s, pattern[, init])`      |             |       |
-| ⚫️️   | `gsub(s, pattern, repl[, n])`     |             |       |
-| 🔵     | `len(s)`                          |             |       |
-| 🔵   | `lower(s)`                        |             |       |
-| ⚫️️   | `match(s, pattern[, init])`       |             |       |
+| ⚫️️   | `dump(function[, strip])`         |                                             |                                                      |
+| 🔵   | `find(s, pattern[, init, plain])` |                                             | Implemented via native Lua pattern engine (`lsonar`) |
+| 🔵   | `format(formatstring, args...)`   |                                             |                                                      |
+| 🔵   | `gmatch(s, pattern[, init])`      |                                             | Stateful iterator callback; supports optional `init` |
+| 🔵   | `gsub(s, pattern, repl[, n])`     | Function replacements currently unsupported | Supports string and table replacements               |
+| 🔵     | `len(s)`                          |                                             |                                                      |
+| 🔵   | `lower(s)`                        |                                             |                                                      |
+| 🔵   | `match(s, pattern[, init])`       |                                             | Implemented via native Lua pattern engine (`lsonar`) |
 | ⚫️️   | `pack(fmt, values...)`            |             |       |
 | ⚫️️   | `packsize(fmt)`                   |             |       |
 | ⚫️️   | `rep(s, n[, sep])`                |             |       |

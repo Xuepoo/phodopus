@@ -5,14 +5,14 @@ category: specifications
 audience: developers
 document_type: specification
 design_status: accepted
-implementation_status: partial
+implementation_status: complete
 website_publish: true
 sidebar_order: 22
 ---
 
 # Modular Standard Library Specification
 
-> Status: Design **accepted** | Implementation: **partial** (baseline stdlib subsets, utf8, and string.format implemented; authentic Lua patterns planned for Phase 1). This document defines the modular architecture, standard library implementations, authentic Lua pattern matching, and Unicode support for Phodopus.
+> Status: Design **accepted** | Implementation: **complete** (baseline stdlib subsets, utf8, string.format, and authentic Lua pattern matching implemented). This document defines the modular architecture, standard library implementations, authentic Lua pattern matching, and Unicode support for Phodopus.
 
 ---
 
@@ -105,13 +105,19 @@ Flags, width, and precision modifiers:
 
 Phodopus rejects mapping `string.match` directly to the Rust `regex` crate, which would introduce divergent semantics (e.g. `\d` instead of `%d`, different quantifier rules, missing frontier patterns).
 
-Instead, Phodopus incorporates an authentic Lua pattern interpreter supporting:
+Instead, Phodopus incorporates an authentic Lua pattern engine (`lsonar` 0.2.4) integrated in `crates/phodopus/src/stdlib/string/patterns.rs`, supporting:
 
-1. **Character Classes**: `%a` (letters), `%c` (control), `%d` (digits), `%l` (lowercase), `%p` (punctuation), `%s` (space), `%u` (uppercase), `%w` (alphanumeric), `%x` (hex), and their uppercase inverse classes (`%A`, `%D`, etc.).
-2. **Magic Characters**: `^`, `$`, `(`, `)`, `%`, `.`, `[`, `]`, `*`, `+`, `-`, `?`.
+1. **Character Classes**: `%a` (letters), `%c` (control), `%d` (digits), `%l` (lowercase), `%p` (punctuation), `%s` (space), `%u` (uppercase), `%w` (alphanumeric), `%x` (hex), and their uppercase inverse classes (`%A`, `%D`, etc.). Character sets `[a-z]` and inverted sets `[^0-9]` are supported.
+2. **Magic Characters**: `^`, `$`, `(`, `)`, `%`, `.`, `[`, `]`, `*`, `+`, `-`, `?`. Literal instances of magic characters must be escaped with `%` (e.g. `%-` for literal hyphen).
 3. **Lazy Quantifier**: `-` matches 0 or more characters greedily-minimal.
-4. **Frontier Patterns**: `%f[set]` matches empty string transitions into `set`.
-5. **Captures**: Nested captures, position captures `()`, and replacement string tokens (`%0` to `%9`) in `string.gsub`.
+4. **Frontier Patterns**: `%f[set]` matches empty string transitions from non-set to set.
+5. **Captures**: Nested captures, position captures `()`, and replacement string tokens (`%0` for full match, `%1` to `%9` for captures, and `%%` for literal percent).
+6. **Functions**:
+   - `string.find(s, pattern [, init [, plain]])`: 1-based indexing, negative `init` support (clamping to start on values smaller than `-len`), and `plain` literal byte matching. Returns `start, end, ...captures` on match, or `nil`.
+   - `string.match(s, pattern [, init])`: Returns captures if any, whole matched string if no captures, or `nil`.
+   - `string.gmatch(s, pattern [, init])`: Stateful iterator callback returning subsequent matches or captures on each invocation. Supports optional `init` starting position.
+   - `string.gsub(s, pattern, repl [, n])`: String and table substitutions bounded by optional maximum count `n`. If `repl` is a table, lookups use the first capture (or entire match if no captures); string and number values substitute, whereas `false` or `nil` values retain the original match. Function replacement raises a clean descriptive error.
+7. **Error Handling**: Malformed patterns raise standard Lua errors formatted as `malformed pattern (...)` rather than panicking.
 
 ### 4.3 Unicode Support (`utf8` Library)
 
