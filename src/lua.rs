@@ -34,7 +34,7 @@ use crate::{
 ///
 /// ```
 /// # use gc_arena::Gc;
-/// # use piccolo::Lua;
+/// # use phodopus::Lua;
 /// # let mut lua = Lua::empty();
 /// lua.enter(|ctx| {
 ///     // Create a new `Gc<'gc, i32>` pointer using the `&Mutation` held inside `ctx`

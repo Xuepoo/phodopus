@@ -1,4 +1,10 @@
 /target/
+/.targets/
+/.worktrees/
+/.trash/
+/recording/
+/tmp/
+.carryctx/config.local.toml
 **/*.rs.bk
 **/*.sw?
 .DS_Store

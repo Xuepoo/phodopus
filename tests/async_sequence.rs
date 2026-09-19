@@ -1,4 +1,4 @@
-use piccolo::{
+use phodopus::{
     async_sequence, meta_ops, Callback, CallbackReturn, Closure, Executor, ExternError, Lua,
     SequenceReturn, Table, Variadic,
 };

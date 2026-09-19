@@ -11,9 +11,9 @@ default-members = [
 [workspace.package]
 version = "0.3.3"
 edition = "2021"
-authors = ["kyren <catherine@kyju.org>"]
+authors = ["kyren <catherine@kyju.org>", "The Bitty Terminal Developers"]
 license = "MIT"
-repository = "https://github.com/kyren/piccolo"
+repository = "https://github.com/bitty-terminal/phodopus"
 
 [workspace.dependencies]
 ahash = "0.8"
@@ -25,11 +25,11 @@ rand = { version = "0.8", features = ["small_rng"] }
 serde = "1.0"
 thiserror = "1.0"
 
-piccolo = { path = "./", version = "0.3.3" }
+phodopus = { path = "./", version = "0.3.3" }
 
 [package]
-name = "piccolo"
-description = "Stackless Lua VM implemented in pure Rust"
+name = "phodopus"
+description = "Stackless Lua VM implemented in pure Rust (Piccolo successor with sandbox, fuel, and modular stdlib)"
 readme = "README.md"
 version.workspace = true
 edition.workspace = true

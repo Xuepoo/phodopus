@@ -1,0 +1,7 @@
+# phodopus: workspace identity descriptor (kind/lang/role mirror workspace.toml).
+[repo]
+name = "phodopus"
+kind = "core"
+lang = "rust"
+role = "pure-Rust stackless Lua runtime: sandbox, fuel, and modular stdlib (Piccolo successor)"
+owner = "bitty-plugins"

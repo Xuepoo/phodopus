@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
 
-use piccolo::{Lua, Table, Value};
+use phodopus::{Lua, Table, Value};
 
 #[test]
 fn test_table_iter() {
@@ -18,10 +18,10 @@ fn test_table_iter() {
 
         let mut pairs = table.iter().collect::<Vec<_>>();
         pairs.sort_by(|&(ak, _), &(bk, _)| match (ak, bk) {
-            (piccolo::Value::Integer(a), piccolo::Value::Integer(b)) => a.cmp(&b),
-            (piccolo::Value::Integer(_), piccolo::Value::String(_)) => Ordering::Less,
-            (piccolo::Value::String(_), piccolo::Value::Integer(_)) => Ordering::Greater,
-            (piccolo::Value::String(a), piccolo::Value::String(b)) => a.cmp(&b),
+            (phodopus::Value::Integer(a), phodopus::Value::Integer(b)) => a.cmp(&b),
+            (phodopus::Value::Integer(_), phodopus::Value::String(_)) => Ordering::Less,
+            (phodopus::Value::String(_), phodopus::Value::Integer(_)) => Ordering::Greater,
+            (phodopus::Value::String(a), phodopus::Value::String(b)) => a.cmp(&b),
             _ => unreachable!(),
         });
 
