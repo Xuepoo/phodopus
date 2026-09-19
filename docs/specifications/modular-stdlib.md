@@ -12,7 +12,7 @@ sidebar_order: 22
 
 # Modular Standard Library Specification
 
-> Status: Design **accepted** | Implementation: **partial** (baseline stdlib subsets present; authentic Lua patterns, string.format, and utf8 planned for Phase 1). This document defines the modular architecture, standard library implementations, authentic Lua pattern matching, and Unicode support for Phodopus.
+> Status: Design **accepted** | Implementation: **partial** (baseline stdlib subsets present; authentic Lua patterns and string.format planned for Phase 1; utf8 implemented). This document defines the modular architecture, standard library implementations, authentic Lua pattern matching, and Unicode support for Phodopus.
 
 ---
 
@@ -98,13 +98,14 @@ Instead, Phodopus incorporates an authentic Lua pattern interpreter supporting:
 
 ### 4.3 Unicode Support (`utf8` Library)
 
-The `utf8` module implements standard Lua 5.3/5.4 functions:
+The `utf8` module is implemented in `crates/phodopus/src/stdlib/utf8.rs` and loaded by default via `load_core()` or modularly via `lua.load_utf8()`. It implements standard Lua 5.3/5.4 functions:
 
 - `utf8.char(...)`: Encodes zero or more Unicode code points into a UTF-8 byte string.
-- `utf8.codepoint(s [, i [, j]])`: Returns integer code points from UTF-8 string positions.
-- `utf8.len(s [, i [, j]])`: Validates UTF-8 encoding and counts code points.
+- `utf8.charpattern`: Standard Lua pattern matching one UTF-8 byte sequence (`[\0-\x7F\xC2-\xF4][\x80-\xBF]*`).
+- `utf8.codepoint(s [, i [, j [, lax]]])`: Returns integer code points from UTF-8 string positions.
+- `utf8.len(s [, i [, j [, lax]]])`: Validates UTF-8 encoding and counts code points.
 - `utf8.offset(s, n [, i])`: Computes byte offset for the n-th code point.
-- `utf8.codes(s)`: Iterates over pairs of `(byte_position, code_point)`.
+- `utf8.codes(s [, lax])`: Iterates over pairs of `(byte_position, code_point)`.
 
 **Architectural Invariant**: The standard `utf8` library measures **code points**, not terminal visual cell width. Grapheme clusters, emoji modifiers, and East Asian double-width characters (`unicode-width`, `unicode-segmentation`) belong strictly to the higher-level terminal host ABI (`bitty.text`), preserving strict Lua conformance in Phodopus.
 
