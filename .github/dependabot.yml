@@ -10,6 +10,9 @@ updates:
       dependencies:
         patterns:
           - "*"
+    ignore:
+      - dependency-name: "allocator-api2"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
