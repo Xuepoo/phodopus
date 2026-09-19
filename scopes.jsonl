@@ -1,0 +1,6 @@
+{"created_at":"2026-09-19T17:29:26.161025749+00:00","id":"01M2XBEFCH316SCSKEZ5ERQGGY","kind":"include","pattern":"crates/phodopus/src/stdlib/utf8.rs","project_id":"01M2X8MCG9EHBDFWKQNX6JYS10","task_id":"01M2XBEADS07X4MEPVMRXG78JW"}
+{"created_at":"2026-09-19T17:29:26.187691883+00:00","id":"01M2XBEFDB6P2TPYHHKFXG30MQ","kind":"include","pattern":"crates/phodopus/src/stdlib/mod.rs","project_id":"01M2X8MCG9EHBDFWKQNX6JYS10","task_id":"01M2XBEADS07X4MEPVMRXG78JW"}
+{"created_at":"2026-09-19T17:29:26.218562186+00:00","id":"01M2XBEFEAFT1QJXAQNNBZSKAK","kind":"include","pattern":"crates/phodopus/src/lua.rs","project_id":"01M2X8MCG9EHBDFWKQNX6JYS10","task_id":"01M2XBEADS07X4MEPVMRXG78JW"}
+{"created_at":"2026-09-19T17:29:26.245332736+00:00","id":"01M2XBEFF5VK51JYNMDKVSVY7V","kind":"include","pattern":"crates/phodopus/tests/scripts/utf8.lua","project_id":"01M2X8MCG9EHBDFWKQNX6JYS10","task_id":"01M2XBEADS07X4MEPVMRXG78JW"}
+{"created_at":"2026-09-19T17:29:26.266179446+00:00","id":"01M2XBEFFT4D3RTS6BY0Y87FES","kind":"include","pattern":"COMPATIBILITY.md","project_id":"01M2X8MCG9EHBDFWKQNX6JYS10","task_id":"01M2XBEADS07X4MEPVMRXG78JW"}
+{"created_at":"2026-09-19T17:29:26.287867293+00:00","id":"01M2XBEFGFKDTKNQZF5BF23Z6H","kind":"include","pattern":"docs/specifications/modular-stdlib.md","project_id":"01M2X8MCG9EHBDFWKQNX6JYS10","task_id":"01M2XBEADS07X4MEPVMRXG78JW"}
