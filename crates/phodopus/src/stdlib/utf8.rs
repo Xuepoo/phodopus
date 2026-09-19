@@ -1,20 +1,19 @@
 use crate::{Callback, CallbackReturn, Context, IntoValue, String, Table, Value};
 
-fn convert_index(i: i64, len: usize) -> Option<usize> {
-    let val = match i {
-        0 => 0,
-        v @ 1.. => v - 1,
-        v @ ..=-1 => (len as i64 + v).max(0),
-    };
-    usize::try_from(val).ok()
+#[inline]
+fn iscont(b: u8) -> bool {
+    (b & 0xC0) == 0x80
 }
 
-fn convert_index_end(i: i64, len: usize) -> Option<usize> {
-    let val = match i {
-        v @ 0.. => v,
-        v @ ..=-1 => (len as i64 + v + 1).max(0),
-    };
-    usize::try_from(val).ok()
+#[inline]
+fn u_posrelat(pos: i64, len: usize) -> i64 {
+    if pos >= 0 {
+        pos
+    } else if (pos as u64).wrapping_neg() > len as u64 {
+        0
+    } else {
+        len as i64 + pos + 1
+    }
 }
 
 fn decode_utf8(bytes: &[u8]) -> Option<(char, usize)> {
@@ -85,7 +84,11 @@ pub fn load_utf8<'gc>(ctx: Context<'gc>) {
         }),
     );
 
-    utf8.set_field(ctx, "charpattern", r"[\0-\x7F\xC2-\xF4][\x80-\xBF]*");
+    utf8.set_field(
+        ctx,
+        "charpattern",
+        ctx.intern(b"[\0-\x7F\xC2-\xF4][\x80-\xBF]*"),
+    );
 
     utf8.set_field(
         ctx,
@@ -93,8 +96,10 @@ pub fn load_utf8<'gc>(ctx: Context<'gc>) {
         Callback::from_fn(&ctx, |ctx, _, mut stack| {
             let s = stack.consume::<String>(ctx)?;
             let bytes = s.as_bytes();
-            if !bytes.is_empty() && (bytes[0] & 0xC0) == 0x80 {
-                return Err("invalid UTF-8 code".into_value(ctx).into());
+            if !bytes.is_empty() && iscont(bytes[0]) {
+                return Err("bad argument #1 to 'codes' (invalid UTF-8 code)"
+                    .into_value(ctx)
+                    .into());
             }
 
             let iter_fn = Callback::from_fn(&ctx, |ctx, _, mut stack| {
@@ -102,13 +107,15 @@ pub fn load_utf8<'gc>(ctx: Context<'gc>) {
                 let bytes = s.as_bytes();
                 let len = bytes.len();
 
-                let n = if n <= 0 {
+                let n = if n < 0 {
+                    0
+                } else if n == 0 {
                     0
                 } else {
-                    let mut pos = (n - 1) as usize;
+                    let mut pos = (n as usize) - 1;
                     if pos < len {
                         pos += 1;
-                        while pos < len && (bytes[pos] & 0xC0) == 0x80 {
+                        while pos < len && iscont(bytes[pos]) {
                             pos += 1;
                         }
                     }
@@ -120,10 +127,15 @@ pub fn load_utf8<'gc>(ctx: Context<'gc>) {
                     return Ok(CallbackReturn::Return);
                 }
 
-                let (c, _) = match decode_utf8(&bytes[n..]) {
+                let (c, char_len) = match decode_utf8(&bytes[n..]) {
                     Some(res) => res,
                     None => return Err("invalid UTF-8 code".into_value(ctx).into()),
                 };
+
+                let next = n + char_len;
+                if next < len && iscont(bytes[next]) {
+                    return Err("invalid UTF-8 code".into_value(ctx).into());
+                }
 
                 let pos = (n as i64) + 1;
                 let codepoint = c as u32 as i64;
@@ -144,30 +156,18 @@ pub fn load_utf8<'gc>(ctx: Context<'gc>) {
             let bytes = s.as_bytes();
             let len = bytes.len();
 
-            let i = i.unwrap_or(1);
-            let j = j.unwrap_or(i);
-
-            let posi = if i >= 0 {
-                i
-            } else if (-i) as usize > len {
-                0
-            } else {
-                len as i64 + i + 1
-            };
-
-            let pose = if j >= 0 {
-                j
-            } else if (-j) as usize > len {
-                0
-            } else {
-                len as i64 + j + 1
-            };
+            let posi = u_posrelat(i.unwrap_or(1), len);
+            let pose = u_posrelat(j.unwrap_or(posi), len);
 
             if posi < 1 {
-                return Err("bad argument #2 (out of range)".into_value(ctx).into());
+                return Err("bad argument #2 to 'utf8.codepoint' (out of bounds)"
+                    .into_value(ctx)
+                    .into());
             }
             if pose > len as i64 {
-                return Err("bad argument #3 (out of range)".into_value(ctx).into());
+                return Err("bad argument #3 to 'utf8.codepoint' (out of bounds)"
+                    .into_value(ctx)
+                    .into());
             }
 
             if posi > pose {
@@ -181,14 +181,7 @@ pub fn load_utf8<'gc>(ctx: Context<'gc>) {
             while pos < end {
                 let (c, char_len) = match decode_utf8(&bytes[pos..]) {
                     Some(res) => res,
-                    None => {
-                        return Err(format!(
-                            "bad argument #1 to 'codepoint' (invalid byte sequence at {})",
-                            pos + 1
-                        )
-                        .into_value(ctx)
-                        .into());
-                    }
+                    None => return Err("invalid UTF-8 code".into_value(ctx).into()),
                 };
                 stack.push_back(Value::Integer(c as u32 as i64));
                 pos += char_len;
@@ -206,26 +199,41 @@ pub fn load_utf8<'gc>(ctx: Context<'gc>) {
             let bytes = s.as_bytes();
             let len = bytes.len();
 
-            let start = convert_index(i.unwrap_or(1), len).unwrap_or(usize::MAX);
-            let end = convert_index_end(j.unwrap_or(len as i64), len).unwrap_or(usize::MAX);
+            let posi = u_posrelat(i.unwrap_or(1), len);
+            let posj = u_posrelat(j.unwrap_or(-1), len);
 
-            if len == 0 || start >= len || start >= end {
+            if posi < 1 || posi > (len as i64) + 1 {
+                return Err(
+                    "bad argument #2 to 'utf8.len' (initial position out of bounds)"
+                        .into_value(ctx)
+                        .into(),
+                );
+            }
+            if posj > len as i64 {
+                return Err(
+                    "bad argument #3 to 'utf8.len' (final position out of bounds)"
+                        .into_value(ctx)
+                        .into(),
+                );
+            }
+
+            if posi > posj {
                 stack.replace(ctx, 0);
                 return Ok(CallbackReturn::Return);
             }
 
-            let end_inclusive = (end - 1).min(len - 1);
-            let mut pos = start;
-            let mut count = 0i64;
+            let mut start = (posi - 1) as usize;
+            let end = posj as usize;
 
-            while pos <= end_inclusive && pos < len {
-                match decode_utf8(&bytes[pos..]) {
+            let mut count = 0i64;
+            while start < end {
+                match decode_utf8(&bytes[start..]) {
                     Some((_, char_len)) => {
                         count += 1;
-                        pos += char_len;
+                        start += char_len;
                     }
                     None => {
-                        stack.replace(ctx, (Value::Nil, (pos as i64) + 1));
+                        stack.replace(ctx, (Value::Nil, (start as i64) + 1));
                         return Ok(CallbackReturn::Return);
                     }
                 }
@@ -244,60 +252,43 @@ pub fn load_utf8<'gc>(ctx: Context<'gc>) {
             let bytes = s.as_bytes();
             let len = bytes.len();
 
-            let i = i.unwrap_or(if n >= 0 { 1 } else { len as i64 + 1 });
+            let def_pos = if n >= 0 { 1 } else { (len as i64) + 1 };
+            let posi = u_posrelat(i.unwrap_or(def_pos), len);
 
-            if i == 0 || i < -(len as i64) || i > len as i64 + 1 {
-                return Err("bad argument #3 to 'offset' (position out of bounds)"
+            if posi < 1 || posi > (len as i64) + 1 {
+                return Err("bad argument #3 to 'utf8.offset' (position out of bounds)"
                     .into_value(ctx)
                     .into());
             }
 
-            let position = if i > 0 {
-                (i - 1) as usize
-            } else {
-                (len as i64 + i) as usize
-            };
+            let mut pos = (posi - 1) as usize;
 
-            if n != 0 && position < len && (bytes[position] & 0xC0) == 0x80 {
+            if n == 0 {
+                while pos > 0 && pos < len && iscont(bytes[pos]) {
+                    pos -= 1;
+                }
+                stack.replace(ctx, (pos as i64) + 1);
+                return Ok(CallbackReturn::Return);
+            }
+
+            if pos < len && iscont(bytes[pos]) {
                 return Err("initial position is a continuation byte"
                     .into_value(ctx)
                     .into());
             }
 
-            if n == 0 {
-                if position >= len {
-                    stack.replace(ctx, Value::Nil);
-                    return Ok(CallbackReturn::Return);
-                }
-
-                let mut pos = position;
-                while pos > 0 && (bytes[pos] & 0xC0) == 0x80 {
-                    pos -= 1;
-                }
-
-                stack.replace(ctx, (pos as i64) + 1);
-                return Ok(CallbackReturn::Return);
-            }
-
-            if n > 0 {
-                let mut count = 0i64;
-                let mut pos = position;
-
-                while count < n && pos < len {
-                    if (bytes[pos] & 0xC0) != 0x80 {
-                        count += 1;
+            if n < 0 {
+                let mut n = n;
+                while n < 0 && pos > 0 {
+                    loop {
+                        pos -= 1;
+                        if pos == 0 || !iscont(bytes[pos]) {
+                            break;
+                        }
                     }
-
-                    if count == n {
-                        break;
-                    }
-
-                    pos += 1;
+                    n += 1;
                 }
-
-                if count == n {
-                    stack.replace(ctx, (pos as i64) + 1);
-                } else if count == n - 1 && pos == len {
+                if n == 0 {
                     stack.replace(ctx, (pos as i64) + 1);
                 } else {
                     stack.replace(ctx, Value::Nil);
@@ -305,25 +296,22 @@ pub fn load_utf8<'gc>(ctx: Context<'gc>) {
                 return Ok(CallbackReturn::Return);
             }
 
-            if n < 0 {
-                let target = -n;
-                let mut count = 0i64;
-                let mut pos = position;
-
-                while count < target {
-                    if pos == 0 {
-                        stack.replace(ctx, Value::Nil);
-                        return Ok(CallbackReturn::Return);
-                    }
-                    pos -= 1;
-                    if (bytes[pos] & 0xC0) != 0x80 {
-                        count += 1;
+            let mut n = n - 1;
+            while n > 0 && pos < len {
+                loop {
+                    pos += 1;
+                    if pos >= len || !iscont(bytes[pos]) {
+                        break;
                     }
                 }
-                stack.replace(ctx, (pos as i64) + 1);
-                return Ok(CallbackReturn::Return);
+                n -= 1;
             }
 
+            if n == 0 {
+                stack.replace(ctx, (pos as i64) + 1);
+            } else {
+                stack.replace(ctx, Value::Nil);
+            }
             Ok(CallbackReturn::Return)
         }),
     );

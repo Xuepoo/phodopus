@@ -113,9 +113,9 @@ likely not be implemented due to differences between piccolo and PUC-Lua.
 | ------ | ---------------------------- | ----------- | ----- |
 | 🔵     | `char(args..)`               |             |       |
 | 🔵     | `charpattern` (value)        |             |       |
-| 🔵     | `codes(s[, lax])`            |             |       |
-| 🔵     | `codepoint(s[, i, j, lax])`  |             |       |
-| 🔵     | `len(s[, i, j, lax])`        |             |       |
+| 🔵     | `codes(s[, lax])`            |             | `lax` parameter is reserved/not yet supported |
+| 🔵     | `codepoint(s[, i, j, lax])`  |             | `lax` parameter is reserved/not yet supported |
+| 🔵     | `len(s[, i, j, lax])`        |             | `lax` parameter is reserved/not yet supported |
 | 🔵     | `offset(s, n[, i])`          |             |       |
 
 ## Table

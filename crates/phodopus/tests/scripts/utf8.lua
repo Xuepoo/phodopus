@@ -65,11 +65,18 @@ do
     assert(is_err(utf8.char, 0xD800))
     assert(is_err(utf8.char, 0xDFFF))
     assert(is_err(utf8.char, "not a number"))
+    assert(is_err(utf8.char, math.mininteger))
 end
 
 -- utf8.charpattern tests
 do
-    assert(utf8.charpattern == "[\\0-\\x7F\\xC2-\\xF4][\\x80-\\xBF]*")
+    assert(#utf8.charpattern == 14)
+    local bytes = {string.byte(utf8.charpattern, 1, -1)}
+    assert(#bytes == 14)
+    assert(bytes[1] == 91 and bytes[2] == 0 and bytes[3] == 45 and bytes[4] == 127)
+    assert(bytes[5] == 194 and bytes[6] == 45 and bytes[7] == 244 and bytes[8] == 93)
+    assert(bytes[9] == 91 and bytes[10] == 128 and bytes[11] == 45 and bytes[12] == 191)
+    assert(bytes[13] == 93 and bytes[14] == 42)
 end
 
 -- utf8.codes tests
@@ -114,11 +121,16 @@ do
     assert(#emoji_codes == 1)
     assert(emoji_codes[1][1] == 1 and emoji_codes[1][2] == 128512)
 
-    -- Invalid UTF-8 sequences error out
+    -- Invalid UTF-8 sequences and orphan continuation bytes error out
     assert(collect_codes("abc\xE2\x82") == false)
     assert(collect_codes("abc\xE2\x82\xFF") == false)
     assert(collect_codes("abc\xFF") == false)
     assert(collect_codes("\xC0\x80") == false)
+    assert(collect_codes("a\x80b") == false)
+    assert(collect_codes("\xC2\xA2\x80") == false)
+    assert(collect_codes("\x80") == false)
+    assert(collect_codes("\x80abc") == false)
+    assert(collect_codes("abc\x80") == false)
 end
 
 -- utf8.codepoint tests
@@ -171,6 +183,11 @@ do
     assert(collect_codepoints("abc\xFF", 4) == false)
     assert(collect_codepoints("abc\xE2\x82", 1, 5) == false)
     assert(collect_codepoints("abc\xE2\x20\xAC", 1, 6) == false)
+
+    -- math.mininteger regression tests
+    assert(collect_codepoints("abc", math.mininteger) == false)
+    assert(#collect_codepoints("abc", 1, math.mininteger) == 0)
+    assert(collect_codepoints("abc", 0) == false)
 end
 
 -- utf8.len tests
@@ -197,9 +214,19 @@ do
     assert(utf8.len(s, 11, 12) == 1)
     assert(utf8.len(s, 1, 6) == 3)
     assert(utf8.len(s, 7, 12) == 3)
-    assert(utf8.len(s, 13, 20) == 0)
+    assert(utf8.len(s, 13, 12) == 0)
     assert(utf8.len(s, 5, 1) == 0)
     assert(utf8.len(s, 1, 11) == 6)
+
+    -- Boundary checks
+    assert(is_err(utf8.len, s, 0))
+    assert(is_err(utf8.len, s, 14))
+    assert(is_err(utf8.len, s, 13, 20))
+    assert(is_err(utf8.len, s, 1, 13))
+    assert(is_err(utf8.len, s, math.mininteger))
+    assert(utf8.len(s, 1, math.mininteger) == 0)
+    assert(utf8.len(s, 1, 0) == 0)
+    assert(utf8.len(s, 1, -20) == 0)
 
     -- Invalid byte sequence error position tests
     local res, pos = utf8.len("abc\xFF")
@@ -249,10 +276,17 @@ do
     assert(utf8.offset(s, 0, 4) == 3)
     assert(utf8.offset(s, 0, 11) == 11)
     assert(utf8.offset(s, 0, 12) == 11)
-    assert(utf8.offset(s, 0, 13) == nil)
+    assert(utf8.offset(s, 0, 13) == 13)
+    assert(is_err(utf8.offset, s, 0, 14))
     assert(is_err(utf8.offset, s, 0, 0))
     assert(utf8.offset(s, 0, -1) == 11)
     assert(utf8.offset(s, 0, -12) == 1)
+
+    -- math.mininteger regression tests
+    assert(utf8.offset(s, math.mininteger) == nil)
+    assert(is_err(utf8.offset, s, 1, math.mininteger))
+    assert(is_err(utf8.offset, s, -1, math.mininteger))
+    assert(is_err(utf8.offset, s, 0, math.mininteger))
 
     local ascii = "ABCDEFG"
     assert(utf8.offset(ascii, 3, 1) == 3)
@@ -273,5 +307,6 @@ do
     assert(utf8.offset(emoji, 0, 4) == 2)
     assert(utf8.offset(emoji, 0, 5) == 2)
     assert(utf8.offset(emoji, 0, 6) == 6)
-    assert(utf8.offset(emoji, 0, 7) == nil)
+    assert(utf8.offset(emoji, 0, 7) == 7)
+    assert(is_err(utf8.offset, emoji, 0, 8))
 end
