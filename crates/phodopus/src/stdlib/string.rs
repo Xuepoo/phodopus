@@ -1,4 +1,6 @@
-use crate::{Callback, CallbackReturn, Context, FromValue, String, Table, Value};
+use crate::{Callback, CallbackReturn, Context, FromValue, IntoValue, String, Table, Value};
+
+mod format;
 
 pub fn load_string<'gc>(ctx: Context<'gc>) {
     let string = Table::new(&ctx);
@@ -93,6 +95,29 @@ pub fn load_string<'gc>(ctx: Context<'gc>) {
                     .collect::<Vec<_>>(),
             );
             stack.replace(ctx, uppered);
+            Ok(CallbackReturn::Return)
+        }),
+    );
+
+    string.set_field(
+        ctx,
+        "format",
+        Callback::from_fn(&ctx, |ctx, _, mut stack| {
+            let format_val = stack
+                .pop_front()
+                .ok_or_else(|| "bad argument #1 to 'format' (string expected, got no value)")
+                .map_err(|err| err.into_value(ctx))?;
+            let formatstring = String::from_value(ctx, format_val)?;
+            let formatstring = formatstring.to_str()?;
+
+            let args: Vec<Value> = stack.into_iter().collect();
+
+            let formatted = format::format(&ctx, formatstring, &args).map_err(|err| {
+                let err = err.to_string();
+                err.into_value(ctx)
+            })?;
+
+            stack.replace(ctx, formatted);
             Ok(CallbackReturn::Return)
         }),
     );

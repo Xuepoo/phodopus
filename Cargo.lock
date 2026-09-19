@@ -171,6 +171,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "fhex"
+version = "2.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "13d3e7f69a748e4c4e1fa779b9ad497af58e90a4e222ef3f99d7fef79a82a632"
+
+[[package]]
 name = "gc-arena"
 version = "0.5.3"
 source = "git+https://github.com/kyren/gc-arena?rev=5a7534b883b703f23cfb8c3cfdf033460aa77ea9#5a7534b883b703f23cfb8c3cfdf033460aa77ea9"
@@ -294,6 +300,7 @@ dependencies = [
  "allocator-api2",
  "anyhow",
  "clap",
+ "fhex",
  "gc-arena",
  "hashbrown",
  "rand",
