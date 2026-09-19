@@ -67,12 +67,18 @@
 ### GitHub hygiene (labels and milestones)
 
 - Every GitHub Issue and PR carries labels (`feat`/`fix`/`docs`/`chore` +
-  `P0`/`P1`/`P2` + `area:*`) and milestone (`v0.1.0`), created with
+  `P0`/`P1`/`P2` + `area:*`) and milestone (`v0.0.1`), created with
   `gh issue create --label ... --milestone ...` and kept in sync via `gh issue edit`
   or `gh pr edit`.
 - Every task description and PR body includes:
   `Priority: ... | Area: ... | Labels: ... | Milestone: ... | Task: CTX-XXXX`.
 - Merge method: squash merges only (`gh pr merge --squash --delete-branch`).
+- Independent Review Gate: every PR must undergo rigorous review and verification before merge;
+  never merge without green CI and confirmed verification against regressions.
+- Documentation Synchronization: every code change must synchronously update affected
+  canonical documents in `docs/` and crate READMEs.
+- Proactive Enhancement: actively identify and implement opportunities to optimize memory
+  consumption, execution efficiency, fuel budgeting precision, and API ergonomics.
 
 ### Quality gates before push (mandatory)
 
