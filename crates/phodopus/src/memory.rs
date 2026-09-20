@@ -16,13 +16,20 @@
 //!      *before* either part is allocated (`Table::try_new`);
 //!    * every table array/map growth, charged for the amortized growth request before the fallible
 //!      reserve (`RawTable::try_reserve_array` / `try_reserve_map`);
+//!    * every `table.pack` / `table.unpack` sequence batch, capped to the remaining quota before
+//!      the thread-stack `reserve` (`stdlib::table::cap_batch_for_quota`): the batch is shrunk to
+//!      fit so execution keeps making progress, and refused with a typed [`OutOfMemory`] only when
+//!      not even one more element fits;
 //!    * `..` / `table.concat` result buffers, charged for the projected size before
 //!      `Vec::with_capacity` (`meta_ops::concat_many` / `concat_separated`);
 //!    * every closure created by the `Closure` opcode, charged for its `Gc`-boxed `ClosureInner`
 //!      and upvalue vector before the box is allocated (`Closure::try_from_parts`), so a retained
 //!      closure chain is refused at the ceiling rather than at the execution boundary;
-//!    * large standard-library string buffers such as `string.rep`, `string.format`, and
-//!      `string.gsub`, charged for the projected output before it is appended (`stdlib::string`).
+//!    * large standard-library buffers, charged for the projected output before it is appended:
+//!      `string.rep` / `string.format` / `string.gsub` (`stdlib::string`, `stdlib::string::patterns`),
+//!      `string.pack` (`stdlib::string::pack`), `string.char` (`stdlib::string`), and `utf8.char`
+//!      (`stdlib::utf8`). These are native (untracked) Rust buffers, so without the charge a hostile
+//!      call could stage megabytes the GC boundary never observes.
 //!
 //!    These checks run *before* the growth is attempted, so the documented quota paths cannot
 //!    trigger a native abort, `handle_alloc_error`, or a partially-initialized value.
@@ -33,14 +40,27 @@
 //!    boxes read by the `Closure` opcode, or interned-string nodes). The executor step loop
 //!    therefore checks the arena's tracked allocation against the ceiling after every iteration
 //!    and refuses through the ordinary Lua error machinery once the excess is confirmed retained.
-//!    This closes the whole class of unchecked retained-growth paths, not one site at a time. The
-//!    executor cannot collect inside arena mutation, so it never attempts reclamation; it only
-//!    refuses. The documented overshoot is bounded by a single executor iteration
-//!    (`VM_GRANULARITY = 64` VM instructions).
+//!    This closes the whole class of unchecked retained-growth paths, not one site at a time.
+//!    Because every quota-capped batch reserve (path 1) stages at most the remaining quota, the
+//!    largest single-iteration allocation is itself quota-capped: the peak tracked allocation is
+//!    bounded by the ceiling plus one geometric vector doubling (measured worst case <= 2x quota
+//!    at 32 KiB and above; see the scope and bound note in
+//!    `docs/specifications/sandbox-and-fuel.md` §4.2).
+//!
+//!    The bound above holds for the production `Lua::execute` path, which drives `Executor::step`
+//!    with a bounded fuel slice (4096 units). A host that drives the public `Executor::step`
+//!    directly with an unbounded fuel slice opts out of that slicing and must supply its own
+//!    quota discipline: a single poll can then stage up to one quota-capped batch plus its vector
+//!    doubling, which the chokepoint still refuses on the next iteration, but the fuel-sized batch
+//!    is only capped by the quota, not by the slice.
+//!
+//!    The executor cannot collect inside arena mutation, so it never attempts reclamation; it only
+//!    refuses. Reclamation happens at the GC boundary between steps.
 //!
 //! Collection between executor steps (at the host boundary) reclaims garbage, so transient
-//! allocation that a collection can recover never triggers the refusal. See the scope and bound
-//! note in `docs/specifications/sandbox-and-fuel.md` §4.2.
+//! allocation that a collection can recover never triggers the refusal. A quota smaller than the
+//! runtime's own baseline footprint (~25 KiB) cannot run any script: the refusal then fires at
+//! baseline, which is correct (the quota is unsatisfiable) rather than a bounded overshoot.
 //!
 //! The ceiling is optional: [`MemoryLimit::new(None)`](MemoryLimit::new) means "unbounded", which
 //! preserves the historical measuring-only behavior.

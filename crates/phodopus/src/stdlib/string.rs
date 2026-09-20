@@ -104,13 +104,19 @@ pub fn load_string<'gc>(ctx: Context<'gc>) {
         ctx,
         "char",
         Callback::from_fn(&ctx, |ctx, mut exec, mut stack| {
+            let nargs = stack.len();
+            // `bytes` is a native (untracked) buffer holding one byte per argument; charge it
+            // against the hard quota up front (checked arithmetic) so a hostile
+            // `string.char` with millions of arguments cannot stage an untracked buffer.
+            let projected = nargs;
+            if sandbox::checked_output_growth(0, projected).is_none() {
+                return Err("resulting string too large".into_value(ctx).into());
+            }
+            ctx.check_memory(projected)?;
             let bytes = stack
                 .into_iter()
                 .map(|c| u8::from_value(ctx, c))
                 .collect::<Result<Vec<_>, _>>()?;
-            if sandbox::checked_output_growth(0, bytes.len()).is_none() {
-                return Err("resulting string too large".into_value(ctx).into());
-            }
             exec.fuel().consume(sandbox::output_cost(bytes.len()));
             let string = ctx.intern(&bytes);
             stack.replace(ctx, string);

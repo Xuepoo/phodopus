@@ -401,7 +401,10 @@ impl<'gc> GsubSequence<'gc> {
 }
 
 /// Appends `s` to `result`, enforcing the checked 16 MiB output ceiling and
-/// charging one Fuel per appended output byte.
+/// charging one Fuel per appended output byte. `result` is a native (untracked)
+/// buffer, so the projected size is also charged against the hard memory quota
+/// before it grows; otherwise a hostile `gsub` expansion would build a
+/// multi-megabyte buffer that only the GC boundary would ever observe.
 fn push_checked<'gc>(
     result: &mut StdString,
     s: &str,
@@ -413,6 +416,7 @@ fn push_checked<'gc>(
             "resulting string too large".into_value(ctx),
         ));
     }
+    ctx.check_memory(result.len().saturating_add(s.len()))?;
     fuel.consume(sandbox::output_cost(s.len()));
     result.push_str(s);
     Ok(())

@@ -329,6 +329,11 @@ fn ensure_capacity<'gc>(
     if writer.len().saturating_add(additional) > MAX_STRING_PACK_BYTES {
         Err("resulting string too large".into_value(ctx).into())
     } else {
+        // Charge the projected output buffer against the hard memory quota as well as the
+        // 16 MiB ceiling, matching `string.rep`. Without this, a hostile `pack` (for example a
+        // `c1000000` repeat) builds a multi-megabyte native buffer that only the GC boundary
+        // would ever observe.
+        ctx.check_memory(writer.len().saturating_add(additional))?;
         Ok(())
     }
 }

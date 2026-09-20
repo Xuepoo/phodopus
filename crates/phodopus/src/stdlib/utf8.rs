@@ -85,6 +85,10 @@ pub fn load_utf8<'gc>(ctx: Context<'gc>) {
                 if sandbox::checked_output_growth(bytes.len(), encoded.len()).is_none() {
                     return Err("resulting string too large".into_value(ctx).into());
                 }
+                // `bytes` is a native (untracked) buffer, so charge the projected size against
+                // the hard quota before it grows; otherwise a hostile `utf8.char` with thousands
+                // of codepoints builds a multi-kilobyte buffer the GC boundary never observes.
+                ctx.check_memory(bytes.len().saturating_add(encoded.len()))?;
                 exec.fuel().consume(sandbox::output_cost(encoded.len()));
                 bytes.extend_from_slice(encoded);
             }

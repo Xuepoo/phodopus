@@ -457,6 +457,45 @@ fn table_insert_impl<'gc>(
 const PACK_ELEMS_PER_FUEL: usize = 8;
 const PACK_MIN_BATCH_SIZE: usize = 4096;
 
+/// Shrink a fuel-sized `stack.reserve` batch so its projected bytes fit the remaining
+/// hard-memory quota, using checked arithmetic.
+///
+/// The batch reserve below stages `batch_size` thread-stack slots *before* any quota check
+/// runs, so an uncapped fuel-sized batch could overshoot a small quota by orders of magnitude
+/// within a single sequence poll (a host driving the public `Executor::step` with a large fuel
+/// slice makes the overshoot effectively unbounded). Capping by the remaining quota instead of
+/// just the remaining fuel keeps one poll to at most the ceiling plus one geometric vector
+/// doubling. The batch is shrunk to fit so execution still makes progress; only when not even
+/// one more element fits is a typed [`OutOfMemory`] returned and the caller must refuse instead
+/// of reserving. With no quota configured the batch passes through unchanged.
+fn cap_batch_for_quota<'gc>(ctx: Context<'gc>, batch_size: usize) -> Result<usize, OutOfMemory> {
+    let Some(max) = ctx.memory_limit().max_bytes() else {
+        return Ok(batch_size);
+    };
+    let current = ctx.metrics().total_allocation();
+    let slot = mem::size_of::<Value<'gc>>();
+    let Some(projected) = batch_size.checked_mul(slot) else {
+        // The batch is unrepresentable in bytes; it cannot fit under any ceiling.
+        return Err(OutOfMemory {
+            requested: usize::MAX,
+            limit: max,
+            current,
+        });
+    };
+    if current.saturating_add(projected) <= max {
+        return Ok(batch_size);
+    }
+    let affordable = max.saturating_sub(current) / slot;
+    if affordable == 0 {
+        return Err(OutOfMemory {
+            requested: current.saturating_add(projected),
+            limit: max,
+            current,
+        });
+    }
+    Ok(batch_size.min(affordable))
+}
+
 #[derive(Collect)]
 #[collect(no_drop)]
 enum Pack<'gc> {
@@ -522,6 +561,10 @@ impl<'gc> Sequence<'gc> for Pack<'gc> {
                 let batch_size = available_elems
                     .max(PACK_MIN_BATCH_SIZE)
                     .min(remaining_elems);
+                // Quota-cap the batch *before* reserving, so a fuel-sized batch cannot stage
+                // more bytes than the remaining quota allows. Shrinking keeps progress; the
+                // residual vector-doubling slack is bounded by the executor chokepoint.
+                let batch_size = cap_batch_for_quota(ctx, batch_size)?;
                 stack.reserve(batch_size);
                 *batch_end = *index + batch_size;
 
@@ -661,6 +704,11 @@ impl<'gc> Sequence<'gc> for Unpack<'gc> {
                 let batch_size = available_elems
                     .max(UNPACK_MIN_BATCH_SIZE)
                     .min(remaining_elems);
+                // Quota-cap the batch *before* reserving: an unpack bomb (`table.unpack` with a
+                // huge explicit range) otherwise stages `remaining_fuel x ELEMS_PER_FUEL` slots
+                // unchecked, overshooting a small quota by 30x+ in a single poll. Shrinking keeps
+                // progress; refusal (when nothing fits) surfaces as a typed `OutOfMemory`.
+                let batch_size = cap_batch_for_quota(ctx, batch_size)?;
                 stack.reserve(batch_size);
                 *batch_end = *index + batch_size;
 

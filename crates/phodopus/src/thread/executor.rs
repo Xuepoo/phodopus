@@ -533,8 +533,12 @@ impl<'gc> Executor<'gc> {
             // route internal `Gc::new` through an application allocator, so per-site pre-checks
             // cannot cover every retention path (thread frames, upvalue boxes, interned strings).
             // This loop checks the arena's continuously updated tracked allocation after every
-            // executor iteration, which bounds any unchecked retained-growth path by one iteration
-            // (`VM_GRANULARITY` VM instructions) rather than by execution length.
+            // executor iteration. Combined with the quota-capped batch reserves (every
+            // `table.pack` / `table.unpack` sequence batch stages at most the remaining quota),
+            // the largest single-iteration allocation is itself quota-capped, so the peak is
+            // bounded by the ceiling plus one geometric vector doubling (measured <= 2x quota at
+            // 32 KiB and above through the production `Lua::execute` path, which steps with a
+            // bounded 4096-unit fuel slice).
             //
             // Collection is forbidden inside arena mutation, so this can only refuse, never reclaim.
             // The first observation of an excess yields to the host boundary (which may collect); if

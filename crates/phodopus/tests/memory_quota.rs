@@ -9,10 +9,14 @@
 //! Two complementary enforcement layers are exercised:
 //!
 //! * per-site pre-allocation checks for the listed operations (table constructor, table growth,
-//!   `..`/`table.concat`, `Closure`, large string buffers), and
+//!   `table.pack` / `table.unpack` batch caps, `..`/`table.concat`, `Closure`, large string
+//!   buffers), and
 //! * the executor-loop chokepoint, which bounds any *unchecked* retained-growth path (notably deep
-//!   Lua recursion creating thread frames) by one executor iteration rather than by execution
-//!   length. The chokepoint injects a catchable `OutOfMemory` through the Lua error machinery, so
+//!   Lua recursion creating thread frames). Because every batch reserve stages at most the
+//!   remaining quota, the largest single-iteration allocation is itself quota-capped: the peak is
+//!   bounded by the ceiling plus one geometric vector doubling (measured <= 2x at 32 KiB and above
+//!   through the production `Lua::execute` path, which steps with a bounded 4096-unit fuel slice).
+//!   The chokepoint injects a catchable `OutOfMemory` through the Lua error machinery, so
 //!   `pcall` recovers and the instance stays usable.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -679,9 +683,10 @@ fn memory_limit_check_current_refuses_above_ceiling() {
 ///
 /// This is the structural regression: before the chokepoint, `f(800000)` at a 1 MiB quota reached
 /// ~92 MiB (≈88×) because the quota was only checked at the host boundary, after the whole step
-/// completed. The executor now checks the arena's tracked allocation after every iteration, so the
-/// peak is bounded by one executor iteration. The asserted bound (2× quota) is the honest,
-/// documented small bound; the observed value is ~1.4× (one geometric vector doubling in the call
+/// completed. The executor now checks the arena's tracked allocation after every iteration, and
+/// every batch reserve stages at most the remaining quota, so the peak is bounded by the ceiling
+/// plus one quota-capped single-iteration allocation. The asserted bound (2× quota) is the honest,
+/// documented bound; the observed value is ~1.4× (one geometric vector doubling in the call
 /// frame path).
 #[test]
 fn quota_refuses_deep_recursion_with_bounded_overshoot() -> Result<(), ExternError> {
@@ -772,5 +777,106 @@ fn quota_stops_unbounded_retained_state_loop() -> Result<(), ExternError> {
         "tracked total {} exceeded 2x the {SMALL_QUOTA} byte quota",
         lua.total_memory()
     );
+    Ok(())
+}
+
+/// The `table.unpack` sequence bomb at a small quota: `table.unpack({}, 1, 4000000)` stages
+/// `remaining_fuel x ELEMS_PER_FUEL` thread-stack slots per batch *before* any quota check.
+///
+/// Before the quota-capped batch reserve this overshot small quotas by an order of magnitude or
+/// more in a single poll (32 KiB quota: ~1.07 MiB peak, ~32.6x; 256 KiB: ~4.1x). The batch is now
+/// shrunk to the remaining quota, so the peak is bounded by the ceiling plus one geometric vector
+/// doubling (measured <= 2x at 32 KiB and above through the production `Lua::execute` path, which
+/// steps with a bounded 4096-unit fuel slice).
+#[test]
+fn quota_caps_unpack_sequence_bomb_at_small_quota() -> Result<(), ExternError> {
+    for quota in [32 * 1024, 256 * 1024] {
+        let mut lua = Lua::builder().memory_limit(quota).build();
+
+        let executor = start(&mut lua, "return table.unpack({}, 1, 4000000)");
+
+        let caught = catch_unwind(AssertUnwindSafe(|| lua.execute::<()>(&executor)));
+        let result = caught.expect("the batch-cap refusal must not unwind the host thread");
+        let error = result.expect_err("the unpack bomb must be refused");
+        let oom = oom_from(&error).expect("failure must be a typed OutOfMemory");
+        assert_eq!(oom.limit, quota);
+
+        let observed = lua.total_memory();
+        assert!(
+            observed <= quota * 2,
+            "unpack-bomb peak {observed} exceeded 2x the {quota} byte quota \
+             (pre-fix regression: ~32.6x at 32 KiB, ~4.1x at 256 KiB)"
+        );
+    }
+    Ok(())
+}
+
+/// Shrinking the batch must keep progress: a feasible small unpack under a quota with enough
+/// headroom succeeds instead of being refused outright. (A 32 KiB quota leaves only ~8 KiB above
+/// the ~25 KiB runtime baseline, so the feasible case uses 256 KiB, where 1000 slots x 16 bytes
+/// fit comfortably.)
+#[test]
+fn quota_capped_unpack_batch_still_makes_progress() -> Result<(), ExternError> {
+    const QUOTA: usize = 256 * 1024;
+    let mut lua = Lua::builder().memory_limit(QUOTA).build();
+    let executor = start(&mut lua, "return select('#', table.unpack({}, 1, 1000))");
+    let count = lua.execute::<i64>(&executor)?;
+    assert_eq!(count, 1000);
+    Ok(())
+}
+
+/// The `table.pack` path shares the same quota-capped batch reserve as `table.unpack`: packing a
+/// large argument list at a small quota is refused within the bound rather than overshooting it.
+#[test]
+fn quota_caps_pack_sequence_batch_at_small_quota() -> Result<(), ExternError> {
+    const QUOTA: usize = 32 * 1024;
+    let mut lua = Lua::builder().memory_limit(QUOTA).build();
+
+    let executor = start(
+        &mut lua,
+        "local t = {}; for i = 1, 200000 do t[i] = i end return table.pack(table.unpack(t))",
+    );
+
+    let caught = catch_unwind(AssertUnwindSafe(|| lua.execute::<()>(&executor)));
+    let result = caught.expect("the batch-cap refusal must not unwind the host thread");
+    let error = result.expect_err("the pack bomb must be refused");
+    let oom = oom_from(&error).expect("failure must be a typed OutOfMemory");
+    assert_eq!(oom.limit, QUOTA);
+    assert!(
+        lua.total_memory() <= QUOTA * 2,
+        "pack-bomb peak {} exceeded 2x the {QUOTA} byte quota",
+        lua.total_memory()
+    );
+    Ok(())
+}
+
+/// Native (GC-untracked) string buffers must also be quota-checked: `string.pack` with a huge
+/// `c`-repeat and a `gsub` expansion bomb at a small quota are refused with a typed
+/// `OutOfMemory` instead of staging megabytes the GC boundary never observes.
+#[test]
+fn quota_refuses_untracked_string_buffer_bombs() -> Result<(), ExternError> {
+    for quota in [32 * 1024, 256 * 1024] {
+        let mut lua = Lua::builder().memory_limit(quota).build();
+        let executor = start(&mut lua, "return #string.pack('c1000000', 'x')");
+        let result = lua.execute::<i64>(&executor);
+        let error = result.expect_err("the pack 'c'-repeat bomb must be refused");
+        let oom = oom_from(&error).expect("failure must be a typed OutOfMemory");
+        assert_eq!(oom.limit, quota);
+
+        let mut lua = Lua::builder().memory_limit(quota).build();
+        let executor = start(
+            &mut lua,
+            "local t = string.rep('a', 5000); return #((t:gsub('a', string.rep('b', 1000))))",
+        );
+        let result = lua.execute::<i64>(&executor);
+        let error = result.expect_err("the gsub expansion bomb must be refused");
+        let oom = oom_from(&error).expect("failure must be a typed OutOfMemory");
+        assert_eq!(oom.limit, quota);
+        assert!(
+            lua.total_memory() <= quota * 2,
+            "gsub-bomb peak {} exceeded 2x the {quota} byte quota",
+            lua.total_memory()
+        );
+    }
     Ok(())
 }

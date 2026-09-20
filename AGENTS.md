@@ -114,15 +114,20 @@
   trampoline; this interface is Phase 4 target state and is not yet implemented.
 - **Sandboxing & Fuel**: Execution is deterministic and preemptible by
   instruction Fuel today. A hard heap quota is implemented
-  (`RuntimeBuilder::memory_limit`) with a single executor-loop chokepoint: the
-  tracked allocation is checked after every executor iteration, so any retained
-  growth (including a deep Lua call chain, which has no per-site check) is
-  refused with a typed, `pcall`-catchable `OutOfMemory` and the overshoot is
-  bounded by one executor iteration (`VM_GRANULARITY` = 64 instructions). This
+  (`RuntimeBuilder::memory_limit`) with per-site pre-allocation checks plus a single
+  executor-loop chokepoint: the tracked allocation is checked after every executor iteration,
+  so any retained growth (including a deep Lua call chain, which has no per-site check) is
+  refused with a typed, `pcall`-catchable `OutOfMemory` and the peak is bounded by the ceiling
+  plus one quota-capped single-iteration allocation (measured ≤ 2× quota at 32 KiB and above;
+  the production `Lua::execute` path steps with a bounded 4096-unit fuel slice, and a host
+  driving `Executor::step` directly with an unbounded slice must supply its own quota
+  discipline). This
   is complemented by per-site pre-allocation checks that refuse precisely
   _before_ a table constructor's initial storage, any later table array/map
-  growth, a `..`/`table.concat` result buffer, a `Closure` opcode's `Gc`-boxed
-  closure, or a large `string.rep`/`string.format`/`string.gsub` buffer is
+  growth, a `table.pack`/`table.unpack` sequence batch (capped to the remaining quota),
+  a `..`/`table.concat` result buffer, a `Closure` opcode's `Gc`-boxed
+  closure, or a large `string.rep`/`string.format`/`string.gsub`/`string.pack`/`string.char`/
+  `utf8.char` buffer is
   allocated. Collection cannot run inside arena mutation, so the executor only
   refuses; reclamation happens at the GC boundary between steps. The exact
   bound and scope are in `docs/specifications/sandbox-and-fuel.md` §4.2.
