@@ -125,19 +125,20 @@ introduces no `unsafe` into callback bodies.
 
 | Line | Site                                   | Invariant                                                                                                           | Exercising test                                                     | Status |
 | :--- | :------------------------------------- | :------------------------------------------------------------------------------------------------------------------ | :------------------------------------------------------------------ | :----- |
-| 79   | `unsafe impl Collect for HostOpHandle` | `HostOpHandle` is a plain `u64` with no GC pointers; `needs_trace()` is `false`, so the manual impl traces nothing. | `tests/hostop.rs` (all bridge tests)                                | active |
-| 168  | `unsafe impl Collect for HostOpGuard`  | The guard holds only a `u64` handle and a `'static` Rust hook (no GC pointers); `needs_trace()` is `false`.         | `tests/hostop.rs::hostop_handle_finalizer_notifies_host_on_collect` | active |
+| 86   | `unsafe impl Collect for HostOpHandle` | `HostOpHandle` is a plain `u64` with no GC pointers; `needs_trace()` is `false`, so the manual impl traces nothing. | `tests/hostop.rs` (all bridge tests)                                | active |
+| 175  | `unsafe impl Collect for HostOpGuard`  | The guard holds only a `u64` handle and a `'static` Rust hook (no GC pointers); `needs_trace()` is `false`.         | `tests/hostop.rs::hostop_handle_finalizer_notifies_host_on_collect` | active |
 
 The manual impls exist because the types deliberately opt out of derived tracing: neither type owns
 GC-managed data by construction (the GC-isolation contract — only the numeric handle crosses into
 host memory). A derived `Collect` would be equally sound here; the manual impls document the
 no-trace invariant explicitly.
 
-### 3.8 `crates/phodopus/tests/hostop.rs` (1 site) — host-async bridge test scaffolding, **owned by CTX-0019**
+### 3.8 `crates/phodopus/tests/hostop.rs` (2 sites) — host-async bridge test scaffolding, **owned by CTX-0019**
 
-| Line | Site                                            | Invariant                                                                                                                                                                 | Exercising test                      | Status |
-| :--- | :---------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | :----------------------------------- | :----- |
-| 118  | `&mut *this.host.get()` (`*mut MockHost` deref) | The pointer targets the test's stack-owned `MockHost`, which outlives the `Lua` instance; the `Rc<Cell<*mut>>` plumbing is test-only (real hosts own their future table). | `tests/hostop.rs` (all bridge tests) | active |
+| Line | Site                                             | Invariant                                                                                                                                                                 | Exercising test                                       | Status |
+| :--- | :----------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | :---------------------------------------------------- | :----- |
+| 121  | `&mut *this.host.get()` (`*mut MockHost` deref)  | The pointer targets the test's stack-owned `MockHost`, which outlives the `Lua` instance; the `Rc<Cell<*mut>>` plumbing is test-only (real hosts own their future table). | `tests/hostop.rs` (manual-`Sequence` bridge tests)    | active |
+| 642  | `&mut *host_handle.get()` (`*mut AsyncMockHost`) | Same contract as the line-121 site: the pointer targets the test's stack-owned `AsyncMockHost`, which outlives the `Lua` instance; test-only scaffolding.                 | `tests/hostop.rs::async_sequence_suspend_*` (2 tests) | active |
 
 ### 3.9 `crates/phodopus/src/table/table.rs` (0 sites)
 
@@ -181,7 +182,7 @@ crates/phodopus/src/string.rs 10
 crates/phodopus/src/table/raw.rs 3
 crates/phodopus/src/table/table.rs 0
 crates/phodopus-util/src/freeze.rs 11
-crates/phodopus/tests/hostop.rs 1
+crates/phodopus/tests/hostop.rs 2
 <!-- unsafe-ledger:manifest:end -->
 
 The gate additionally forbids any `unsafe` in `crates/phodopus/src/stdlib/` and

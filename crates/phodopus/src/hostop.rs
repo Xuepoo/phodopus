@@ -39,6 +39,12 @@ use crate::{Context, Singleton, Thread, stash::Fetchable, thread::ThreadInner};
 /// bridge; the numeric value crosses into host memory while all GC values stay rooted in the arena
 /// (see the module docs). `Copy + Hash + Eq` so hosts can use it as a map key for their own future
 /// table. Never holds a `Gc` pointer.
+///
+/// Hosts MUST mint handles with [`HostOpHandle::new`] only. Do NOT fabricate handles from
+/// [`HostOpHandle::from_raw`] counters: `from_raw` exists only to rebuild a handle already minted
+/// by `new` (for example a raw value crossing an FFI boundary back into Rust). Handles that were
+/// never minted by `new` can collide with a live parked operation, and the registry will reject
+/// the second `register` under the same raw value (see [`HostOpRegistry::register`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct HostOpHandle(u64);
 
@@ -186,7 +192,6 @@ unsafe impl Collect for HostOpGuard {
 #[derive(Debug, Collect)]
 #[collect(no_drop)]
 pub struct HostOpRegistry<'gc> {
-    next: u64,
     pending: Gc<'gc, RefLock<HostOpTable<'gc>>>,
 }
 
@@ -205,37 +210,31 @@ struct HostOpEntry<'gc> {
 impl<'gc> Singleton<'gc> for HostOpRegistry<'gc> {
     fn create(ctx: Context<'gc>) -> Self {
         Self {
-            next: 1,
             pending: Gc::new(&ctx, RefLock::new(HostOpTable::default())),
         }
     }
 }
 
 impl<'gc> HostOpRegistry<'gc> {
-    /// Allocate a fresh handle that is unique within this `Lua` instance.
-    pub fn alloc_handle(&mut self, _ctx: Context<'gc>) -> HostOpHandle {
-        let raw = self.next;
-        self.next = self.next.wrapping_add(1).max(1);
-        HostOpHandle::from_raw(raw.max(1))
-    }
-
     /// Record a parked op for `thread` under `handle`.
+    ///
+    /// Panics in debug builds if `handle` is already parked (a live duplicate registration would
+    /// otherwise silently orphan the earlier thread's entry). Hosts MUST mint handles with
+    /// [`HostOpHandle::new`], never [`HostOpHandle::from_raw`] counters, so distinct ops never
+    /// share a raw value while both are parked.
     pub(crate) fn register(&self, ctx: &Context<'gc>, handle: HostOpHandle, thread: Thread<'gc>) {
         let entry = HostOpEntry {
             thread: Gc::downgrade(thread.into_inner()),
         };
-        self.pending
+        let previous = self
+            .pending
             .borrow_mut(ctx)
             .entries
             .insert(handle.raw(), entry);
-    }
-
-    /// Look up the thread parked on `handle`, if it is still alive.
-    pub fn find_thread(&self, mc: &Mutation<'gc>, handle: HostOpHandle) -> Option<Thread<'gc>> {
-        let table = self.pending.try_borrow().ok()?;
-        let entry = table.entries.get(&handle.raw())?;
-        let inner = entry.thread.upgrade(mc)?;
-        Some(Thread::from_inner(inner))
+        debug_assert!(
+            previous.is_none(),
+            "duplicate HostOpHandle registration would orphan the parked thread"
+        );
     }
 
     /// Remove the entry for `handle`, returning whether one existed.

@@ -716,8 +716,8 @@ impl<'gc> Executor<'gc> {
     /// # Errors
     ///
     /// Returns `BadExecutorMode` (expected `HostSuspended`) if the executor is not parked, or
-    /// `BadHostOp` if `handle` names no live parked operation (already resolved, unknown, or its
-    /// thread died).
+    /// `HostOpError::Unknown` if `handle` names no live parked operation (already resolved,
+    /// unknown, or its thread died).
     pub fn resume_host_op(
         self,
         ctx: Context<'gc>,
@@ -792,7 +792,7 @@ impl<'gc> Executor<'gc> {
     /// # Errors
     ///
     /// Returns `BadExecutorMode` (expected `HostSuspended`) if the executor is not parked, or
-    /// `BadHostOp` if `handle` names no live parked operation.
+    /// `HostOpError::Unknown` if `handle` names no live parked operation.
     pub fn cancel_host_op(
         self,
         ctx: Context<'gc>,

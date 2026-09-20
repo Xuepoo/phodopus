@@ -14,6 +14,9 @@
 //! 3. Burst: 100 independent suspended coroutines all wake and complete non-blocking.
 //! 4. Fuel/quota accounting: the suspended coroutine burns no fuel while parked (remaining fuel is
 //!    unchanged across parked steps) and resumes correctly through the quota chokepoint.
+//! 5. `async_sequence!` suspend path: the `AsyncSequence::suspend` method (created via the
+//!    `async_sequence` constructor) parks through the same `SequencePoll::Suspend` machinery —
+//!    one resume-with-values test and one cancel-delivery (`StashedError`) test.
 
 use std::{cell::Cell, collections::HashMap, pin::Pin, rc::Rc};
 
@@ -21,7 +24,7 @@ use gc_arena::{Collect, Rootable};
 use phodopus::{
     Callback, CallbackReturn, Closure, Context, Error, Execution, Executor, ExecutorMode,
     ExternError, Fuel, HostOpHandle, HostOpRegistry, HostOpResult, HostOpValue, Lua, Sequence,
-    SequencePoll, Stack, StashedValue, Variadic,
+    SequencePoll, Stack, StashedValue, Variadic, async_sequence,
 };
 
 /// Test-only error for `try_enter` closures that must produce an `Error<'gc>` on failure.
@@ -574,5 +577,192 @@ fn suspend_goes_through_sequence_machinery_and_pending_still_works() -> Result<(
         Ok(ctx.stash(Executor::start(ctx, closure.into(), ())))
     })?;
     assert_eq!(lua.execute::<i32>(&executor)?, 3);
+    Ok(())
+}
+
+/// A deterministic async-bridge host for `async_sequence` tests: pure tick counter plus a stash
+/// of the values each op should deliver on resume. No sleeps; tests advance `ticks` by hand.
+#[derive(Default)]
+struct AsyncMockHost {
+    /// `raw handle -> (ticks remaining, values to deliver)`.
+    pending: HashMap<u64, (u32, Vec<HostOpValue>)>,
+}
+
+impl AsyncMockHost {
+    fn register(&mut self, ticks: u32, values: Vec<HostOpValue>) -> HostOpHandle {
+        let handle = HostOpHandle::new();
+        self.pending.insert(handle.raw(), (ticks, values));
+        handle
+    }
+
+    /// Advance the mock clock one tick; returns due `(handle, values)`, removing them.
+    fn tick(&mut self) -> Vec<(HostOpHandle, Vec<HostOpValue>)> {
+        let mut fired = Vec::new();
+        for (raw, (remaining, _)) in self.pending.iter_mut() {
+            if *remaining > 0 {
+                *remaining -= 1;
+            }
+            if *remaining == 0 {
+                fired.push(*raw);
+            }
+        }
+        fired
+            .into_iter()
+            .map(|raw| {
+                let (_, values) = self.pending.remove(&raw).unwrap();
+                (HostOpHandle::from_raw(raw), values)
+            })
+            .collect()
+    }
+
+    fn cancel(&mut self, handle: HostOpHandle) {
+        self.pending.remove(&handle.raw());
+    }
+}
+
+/// Install an `async_sleep(ticks, wake_value)` global whose sequence is built with the
+/// `async_sequence` constructor and suspends via `AsyncSequence::suspend`.
+///
+/// The async block registers its op with the mock host from inside `try_enter` (the only place
+/// with a `Context`), stashes the handle in the future (handles are `'static`), suspends, and on
+/// wake reads the host's return values from the stack. The wake value is stashed by the *host*
+/// (not held as a `Gc` by the future), preserving the GC-isolation contract.
+fn install_async_sleep(ctx: Context<'_>, host: Rc<Cell<*mut AsyncMockHost>>) {
+    // `host` is cloned into each callback invocation's `async_sequence` create closure below;
+    // the closure runs synchronously inside the callback, so no `'static` escape occurs.
+    let host_handle = host.clone();
+    let callback = Callback::from_fn(&ctx, move |ctx, _, mut stack| {
+        let (ticks, wake): (i32, phodopus::Value) = stack.consume(ctx)?;
+        let value: StashedValue = ctx.stash(wake);
+        let host_handle = host_handle.clone();
+        let seq = async_sequence(&ctx, |_, mut seq| async move {
+            let handle = seq.try_enter(|_, _, _, _| {
+                // SAFETY: same test-only scaffolding contract as `MockSleep`: the pointer
+                // targets the test's stack-owned `AsyncMockHost`, which outlives the `Lua`.
+                let host = unsafe { &mut *host_handle.get() };
+                Ok::<_, phodopus::Error<'_>>(host.register(
+                    ticks.max(0) as u32,
+                    vec![HostOpValue::Stashed(value.clone())],
+                ))
+            })?;
+            seq.suspend(handle).await?;
+            let result = seq.try_enter(|ctx, _, _, mut stack| {
+                let got: phodopus::Value = stack.consume(ctx)?;
+                Ok::<_, phodopus::Error<'_>>(ctx.stash(got))
+            })?;
+            seq.try_enter(|ctx, _, _, mut stack| {
+                use phodopus::stash::Fetchable;
+                let back: phodopus::Value = result.fetch(ctx.registry().roots());
+                stack.replace(ctx, back);
+                Ok::<_, phodopus::Error<'_>>(())
+            })?;
+            Ok(phodopus::SequenceReturn::Return)
+        });
+        Ok(CallbackReturn::Sequence(seq))
+    });
+    ctx.set_global("async_sleep", callback);
+}
+
+#[test]
+fn async_sequence_suspend_resumes_with_host_values() -> Result<(), ExternError> {
+    let mut host = AsyncMockHost::default();
+    let host_ptr: *mut AsyncMockHost = &mut host;
+    let host_cell = Rc::new(Cell::new(host_ptr));
+
+    let mut lua = Lua::core();
+    lua.try_enter(|ctx| {
+        install_async_sleep(ctx, host_cell.clone());
+        Ok(())
+    })?;
+
+    let executor = lua.try_enter(|ctx| {
+        let closure = Closure::load(
+            ctx,
+            None,
+            &br#"
+                local v = async_sleep(2, 42)
+                assert(v == 42, "expected host value 42, got " .. tostring(v))
+                return v
+            "#[..],
+        )?;
+        Ok(ctx.stash(Executor::start(ctx, closure.into(), ())))
+    })?;
+
+    // Drive the trampoline with the mock clock: step until parked, tick, resume when due.
+    let mut fuel = Fuel::with(1_000_000);
+    let mut resumed = false;
+    for _ in 0..100 {
+        match step_until_parked(&mut lua, &executor, &mut fuel) {
+            None => break,
+            Some(handle) => {
+                assert_eq!(
+                    lua.enter(|ctx| ctx.fetch(&executor).mode()),
+                    ExecutorMode::HostSuspended
+                );
+                let fired = host.tick();
+                assert!(
+                    !fired.is_empty() || host.pending.contains_key(&handle.raw()),
+                    "parked op must be known to the host"
+                );
+                if let Some((_, values)) = fired.into_iter().find(|(h, _)| *h == handle) {
+                    lua.enter(|ctx| {
+                        ctx.fetch(&executor)
+                            .resume_host_op(ctx, handle, HostOpResult::from_values(values))
+                            .unwrap();
+                    });
+                    resumed = true;
+                }
+                fuel.refill(1_000_000, 1_000_000);
+            }
+        }
+    }
+    assert!(resumed, "timer should have fired and resumed the script");
+
+    assert_eq!(lua.execute::<i64>(&executor)?, 42);
+    Ok(())
+}
+
+#[test]
+fn async_sequence_suspend_cancel_delivers_stashed_error() -> Result<(), ExternError> {
+    let mut host = AsyncMockHost::default();
+    let host_ptr: *mut AsyncMockHost = &mut host;
+    let host_cell = Rc::new(Cell::new(host_ptr));
+
+    let mut lua = Lua::core();
+    lua.try_enter(|ctx| {
+        install_async_sleep(ctx, host_cell.clone());
+        Ok(())
+    })?;
+
+    let executor = lua.try_enter(|ctx| {
+        let closure = Closure::load(
+            ctx,
+            None,
+            &br#"
+                local ok, err = pcall(async_sleep, 100, 0)
+                assert(ok == false, "cancelled op must raise through pcall")
+                return tostring(err)
+            "#[..],
+        )?;
+        Ok(ctx.stash(Executor::start(ctx, closure.into(), ())))
+    })?;
+
+    let mut fuel = Fuel::with(1_000_000);
+    let handle = step_until_parked(&mut lua, &executor, &mut fuel)
+        .expect("script should park on the async op");
+    // Host policy cancels instead of resolving: the `suspend` await must surface a `StashedError`
+    // that unwinds through Lua `pcall` normally.
+    host.cancel(handle);
+    lua.enter(|ctx| {
+        ctx.fetch(&executor)
+            .cancel_host_op(ctx, handle, "async operation timed out")
+            .unwrap();
+    });
+
+    let msg = lua.execute::<std::string::String>(&executor)?;
+    assert!(
+        msg.contains("async operation timed out"),
+        "unexpected cancel message: {msg}"
+    );
     Ok(())
 }
