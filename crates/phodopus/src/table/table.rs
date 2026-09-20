@@ -8,7 +8,7 @@ use gc_arena::{Collect, Gc, Mutation, lock::RefLock};
 
 use crate::{Context, FromValue, IntoValue, TypeError, Value};
 
-use super::raw::{InvalidTableKey, NextValue, RawTable};
+use super::raw::{NextValue, RawTable, TableError};
 
 pub type TableInner<'gc> = RefLock<TableState<'gc>>;
 
@@ -90,8 +90,8 @@ impl<'gc> Table<'gc> {
         ctx: Context<'gc>,
         key: K,
         value: V,
-    ) -> Result<Value<'gc>, InvalidTableKey> {
-        self.set_raw(&ctx, key.into_value(ctx), value.into_value(ctx))
+    ) -> Result<Value<'gc>, TableError> {
+        self.set_raw(ctx, key.into_value(ctx), value.into_value(ctx))
     }
 
     pub fn get_value<K: IntoValue<'gc>>(self, ctx: Context<'gc>, key: K) -> Value<'gc> {
@@ -101,14 +101,17 @@ impl<'gc> Table<'gc> {
     /// A convenience method over [`Table::set`] for setting a string field of a table.
     ///
     /// It behaves exactly the same as [`Table::set`], except since this only accepts string keys,
-    /// we know it cannot possibly error.
+    /// we know it cannot possibly error on the key. A hard memory-quota refusal can still occur
+    /// and is surfaced as a panic here; trusted stdlib set-up paths call this before any quota is
+    /// installed, so a quota refusal cannot occur during normal construction.
     pub fn set_field<V: IntoValue<'gc>>(
         self,
         ctx: Context<'gc>,
         key: &'static str,
         value: V,
     ) -> Value<'gc> {
-        self.set(ctx, key, value).unwrap()
+        self.set(ctx, key, value)
+            .expect("static string key is valid")
     }
 
     /// Get a value from this table without any automatic type conversion.
@@ -119,11 +122,11 @@ impl<'gc> Table<'gc> {
     /// Set a value in this table without any automatic type conversion.
     pub fn set_raw(
         self,
-        mc: &Mutation<'gc>,
+        ctx: Context<'gc>,
         key: Value<'gc>,
         value: Value<'gc>,
-    ) -> Result<Value<'gc>, InvalidTableKey> {
-        self.0.borrow_mut(&mc).raw_table.set(key, value)
+    ) -> Result<Value<'gc>, TableError> {
+        self.0.borrow_mut(&ctx).raw_table.set(ctx, key, value)
     }
 
     /// Returns a 'border' for this table.

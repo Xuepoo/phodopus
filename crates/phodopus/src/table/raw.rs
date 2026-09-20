@@ -1,11 +1,13 @@
-use std::{fmt, hash::Hash, i64, mem};
+use std::{cmp, fmt, hash::Hash, i64, mem};
 
 use allocator_api2::vec;
 use gc_arena::{Collect, Gc, Mutation, allocator_api::MetricsAlloc};
 use hashbrown::{HashMap, hash_map};
 use thiserror::Error;
 
-use crate::{Callback, Closure, Function, String, Table, Thread, UserData, Value};
+use crate::{
+    Callback, Closure, Context, Function, OutOfMemory, String, Table, Thread, UserData, Value,
+};
 
 #[derive(Debug, Copy, Clone, Error)]
 pub enum InvalidTableKey {
@@ -13,6 +15,28 @@ pub enum InvalidTableKey {
     IsNaN,
     #[error("table key is Nil")]
     IsNil,
+}
+
+/// A failure while storing a value into a [`Table`].
+///
+/// This distinguishes a hostile/invalid key from a hard memory-quota refusal, so callers (and Lua
+/// `pcall`) can tell an out-of-memory condition apart from an ordinary bad-key error.
+#[derive(Debug, Copy, Clone, Error)]
+pub enum TableError {
+    #[error("{0}")]
+    Key(#[from] InvalidTableKey),
+    // A display-forwarding `#[source]` field keeps `Error::source()` populated so the error chain
+    // reaches the concrete `OutOfMemory` payload (`#[error(transparent)]` would flatten the type
+    // and erase it from the chain).
+    #[error("{0}")]
+    OutOfMemory(#[from] OutOfMemory),
+}
+
+impl TableError {
+    /// Whether this error is a hard memory-quota refusal.
+    pub fn is_out_of_memory(&self) -> bool {
+        matches!(self, TableError::OutOfMemory(_))
+    }
 }
 
 #[derive(Debug, Copy, Clone, Collect)]
@@ -89,6 +113,75 @@ impl<'gc> RawTable<'gc> {
         }
     }
 
+    /// Number of additional bytes that growing the array part by `additional` slots would need.
+    fn array_growth_bytes(additional: usize) -> usize {
+        additional.saturating_mul(mem::size_of::<Value<'gc>>())
+    }
+
+    /// Conservative per-entry byte charge for the map part, including a control byte.
+    fn map_entry_bytes() -> usize {
+        mem::size_of::<(Key<'gc>, Value<'gc>)>() + 1
+    }
+
+    /// Ensure the array part can hold `additional` more elements, refusing cleanly on quota
+    /// exhaustion instead of aborting via `handle_alloc_error`.
+    fn try_reserve_array(
+        &mut self,
+        ctx: Context<'gc>,
+        additional: usize,
+    ) -> Result<(), TableError> {
+        let len = self.array.len();
+        let cap = self.array.capacity();
+        let free = cap - len;
+        let needed = additional.saturating_sub(free);
+        if needed == 0 {
+            return Ok(());
+        }
+        // `try_reserve` grows amortized (`max(cap * 2, len + additional)`), so charge the upper
+        // bound of the new capacity minus the current capacity. This is the hard refusal boundary;
+        // the allocator itself cannot refuse a `Global` allocation.
+        let projected = cmp::max(cap.saturating_mul(2), len.saturating_add(additional));
+        ctx.check_memory(Self::array_growth_bytes(projected.saturating_sub(cap)))?;
+        self.array
+            .try_reserve(additional)
+            .map_err(|_| OutOfMemory {
+                requested: self.array.len().saturating_add(additional),
+                limit: ctx.memory_limit().max_bytes().unwrap_or(usize::MAX),
+                current: ctx.metrics().total_allocation(),
+            })?;
+        Ok(())
+    }
+
+    /// Ensure the map part can hold `additional` more elements, refusing cleanly on quota
+    /// exhaustion.
+    fn try_reserve_map(&mut self, ctx: Context<'gc>, additional: usize) -> Result<(), TableError> {
+        if additional <= self.map.capacity().saturating_sub(self.map.len()) {
+            return Ok(());
+        }
+        // A hashbrown table keeps at least one bucket per element, so charge conservatively for
+        // the entry plus its control byte and a growth factor.
+        let raw_needed = additional.saturating_mul(Self::map_entry_bytes());
+        ctx.check_memory(raw_needed)?;
+
+        self.map.retain(|_, v| !v.is_nil());
+        // The map uses the raw-entry API with a manual hasher, so `HashMap::try_reserve` (which
+        // requires `K: Eq + Hash, S: BuildHasher`) is unavailable; reserve the raw table directly.
+        self.map
+            .raw_table_mut()
+            .try_reserve(additional, |(key, _)| {
+                self.hash_builder.hash_one(
+                    key.live_key()
+                        .expect("all keys must be live when table is grown"),
+                )
+            })
+            .map_err(|_| OutOfMemory {
+                requested: self.map.len().saturating_add(additional),
+                limit: ctx.memory_limit().max_bytes().unwrap_or(usize::MAX),
+                current: ctx.metrics().total_allocation(),
+            })?;
+        Ok(())
+    }
+
     pub fn get(&self, key: Value<'gc>) -> Value<'gc> {
         if let Some(index) = to_array_index(key) {
             if index < self.array.len() {
@@ -113,9 +206,10 @@ impl<'gc> RawTable<'gc> {
 
     pub fn set(
         &mut self,
+        ctx: Context<'gc>,
         key: Value<'gc>,
         value: Value<'gc>,
-    ) -> Result<Value<'gc>, InvalidTableKey> {
+    ) -> Result<Value<'gc>, TableError> {
         // If the key is an array candidate and less than the current length of the array, it will
         // go there.
         let index_key = to_array_index(key);
@@ -227,7 +321,7 @@ impl<'gc> RawTable<'gc> {
 
             // If we can fit our new key in an optimally sized array, resize the array and do that.
             if optimal_size > index_key {
-                self.grow_array(optimal_size - self.array.len());
+                self.try_grow_array(ctx, optimal_size - self.array.len())?;
                 // If the value is non-nil, it should have been replaced in the map part without
                 // needing to grow growing.
                 debug_assert!(self.array[index_key].is_nil());
@@ -238,13 +332,13 @@ impl<'gc> RawTable<'gc> {
 
         // If we can't grow the array, we need to grow the map and place the key there. We
         // explicitly double the size of the map.
-        self.reserve_map(self.map.len().max(1));
+        self.try_reserve_map(ctx, self.map.len().max(1))?;
 
         // Now we can insert the new key value pair
         self.map
             .raw_table_mut()
             .try_insert_no_grow(hash, (Key::Live(table_key), value))
-            .unwrap();
+            .expect("map was reserved for at least one new element");
 
         Ok(Value::Nil)
     }
@@ -470,6 +564,41 @@ impl<'gc> RawTable<'gc> {
 
             true
         });
+    }
+
+    /// Quota-checked variant of [`RawTable::grow_array`] that refuses cleanly instead of aborting.
+    ///
+    /// The array is grown to at least the current capacity plus `additional` slots and any map
+    /// entries that now fit in the array part are moved there.
+    pub fn try_grow_array(
+        &mut self,
+        ctx: Context<'gc>,
+        additional: usize,
+    ) -> Result<(), TableError> {
+        self.try_reserve_array(ctx, additional)?;
+        self.array.resize(self.array.capacity(), Value::Nil);
+
+        // We need to take any newly valid array keys from the map part.
+        self.map.retain(|k, v| {
+            if v.is_nil() {
+                // If our entry is dead, remove it.
+                return false;
+            }
+
+            let key = k.live_key().expect("all dead keys should have a Nil value");
+
+            // If our live key is an array index that fits in the array portion, move the entry to
+            // the array portion.
+            if let Some(i) = to_array_index(key.to_value()) {
+                if i < self.array.len() {
+                    self.array[i] = *v;
+                    return false;
+                }
+            }
+
+            true
+        });
+        Ok(())
     }
 
     /// Reserve space in the map part of the table for at least `additional` more elements.

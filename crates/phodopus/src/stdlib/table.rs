@@ -6,13 +6,13 @@ use gc_arena::Collect;
 
 use crate::{
     BoxSequence, Callback, CallbackReturn, Closure, Context, Error, Execution, Function, IntoValue,
-    MetaMethod, Sequence, SequencePoll, SequenceReturn, Stack, StashedError, StashedFunction,
-    StashedTable, StashedValue, Table, Value,
+    MetaMethod, OutOfMemory, Sequence, SequencePoll, SequenceReturn, Stack, StashedError,
+    StashedFunction, StashedTable, StashedValue, Table, Value,
     async_callback::{AsyncSequence, Locals},
     async_sequence,
     fuel::count_fuel,
     meta_ops::{self, ConcatMetaResult, MetaResult, concat_separated},
-    table::RawTable,
+    table::{RawTable, TableError},
 };
 
 pub fn load_table<'gc>(ctx: Context<'gc>) {
@@ -348,9 +348,10 @@ fn table_insert_impl<'gc>(
         // Try the fast path
         match array_insert_shift(
             &mut table.into_inner().borrow_mut(&ctx).raw_table,
+            ctx,
             index,
             value,
-        ) {
+        )? {
             (RawArrayOpResult::Success(_), len) => {
                 // Consume fuel after the operation to avoid computing length twice
                 let shifted_items = len.saturating_sub(
@@ -761,21 +762,23 @@ fn array_remove_shift<'gc>(
 // Additionally, always returns the computed length of the array from before the operation.
 fn array_insert_shift<'gc>(
     table: &mut RawTable<'gc>,
+    ctx: Context<'gc>,
     key: Option<i64>,
     value: Value<'gc>,
-) -> (RawArrayOpResult<()>, usize) {
+) -> Result<(RawArrayOpResult<()>, usize), OutOfMemory> {
     fn inner<'gc>(
         table: &mut RawTable<'gc>,
+        ctx: Context<'gc>,
         length: usize,
         key: Option<i64>,
         value: Value<'gc>,
-    ) -> RawArrayOpResult<()> {
+    ) -> Result<RawArrayOpResult<()>, OutOfMemory> {
         let index;
         if let Some(k) = key {
             if k >= 1 && k <= length as i64 + 1 {
                 index = (k - 1) as usize;
             } else {
-                return RawArrayOpResult::Failed;
+                return Ok(RawArrayOpResult::Failed);
             }
         } else {
             index = length;
@@ -783,14 +786,22 @@ fn array_insert_shift<'gc>(
 
         let array_len = table.array().len();
         if length > array_len {
-            return RawArrayOpResult::Possible;
+            return Ok(RawArrayOpResult::Possible);
         }
 
         assert!(index <= length);
 
         if length == array_len {
-            // If the array is full, grow it.
-            table.grow_array(1);
+            // If the array is full, grow it under the hard memory quota. A bad-key error cannot
+            // occur here, so only the quota refusal is possible.
+            table.try_grow_array(ctx, 1).map_err(|err| match err {
+                TableError::OutOfMemory(o) => o,
+                TableError::Key(_) => OutOfMemory {
+                    requested: 0,
+                    limit: ctx.memory_limit().max_bytes().unwrap_or(usize::MAX),
+                    current: ctx.metrics().total_allocation(),
+                },
+            })?;
         }
 
         let array = table.array_mut();
@@ -800,9 +811,9 @@ fn array_insert_shift<'gc>(
         // we replace it with the value to insert.
         array[index..=length].rotate_right(1);
         array[index] = value;
-        RawArrayOpResult::Success(())
+        Ok(RawArrayOpResult::Success(()))
     }
 
     let length = table.length() as usize;
-    (inner(table, length, key, value), length)
+    Ok((inner(table, ctx, length, key, value)?, length))
 }

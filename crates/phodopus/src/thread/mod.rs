@@ -4,7 +4,17 @@ mod vm;
 
 use thiserror::Error;
 
-use crate::meta_ops::{MetaCallError, MetaOperatorError};
+use crate::{
+    OutOfMemory,
+    meta_ops::{MetaCallError, MetaOperatorError},
+    table::TableError,
+};
+
+impl From<TableError> for VMError {
+    fn from(err: TableError) -> Self {
+        VMError::OperatorError(err.into())
+    }
+}
 
 pub(crate) use self::thread::backtrace;
 pub use self::{
@@ -29,6 +39,8 @@ pub enum VMError {
     BadCall(#[from] MetaCallError),
     #[error("operator error: {0}")]
     OperatorError(#[from] MetaOperatorError),
+    #[error("{0}")]
+    OutOfMemory(#[from] OutOfMemory),
     #[error("_ENV upvalue is only allowed on top-level closure")]
     BadEnvUpValue,
     #[error("Invalid types in for loop; expected numbers, found {0}, {1}, and {2}")]

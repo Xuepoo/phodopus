@@ -5,7 +5,8 @@ use thiserror::Error;
 
 use crate::async_callback::{AsyncSequence, Locals};
 use crate::{
-    Callback, CallbackReturn, Context, Function, IntoValue, Table, Value, table::InvalidTableKey,
+    Callback, CallbackReturn, Context, Function, IntoValue, OutOfMemory, Table, Value,
+    table::{InvalidTableKey, TableError},
 };
 use crate::{SequenceReturn, Stack, async_sequence};
 
@@ -153,8 +154,19 @@ pub enum MetaOperatorError {
     Binary(MetaMethod, &'static str, &'static str),
     #[error("invalid table key")]
     IndexKeyError(#[from] InvalidTableKey),
+    #[error("{0}")]
+    OutOfMemory(#[from] OutOfMemory),
     #[error("concatenation result is too long")]
     ConcatOverflow,
+}
+
+impl From<TableError> for MetaOperatorError {
+    fn from(err: TableError) -> Self {
+        match err {
+            TableError::Key(key) => MetaOperatorError::IndexKeyError(key),
+            TableError::OutOfMemory(oom) => MetaOperatorError::OutOfMemory(oom),
+        }
+    }
 }
 
 #[derive(Debug, Copy, Clone, Error)]
@@ -300,7 +312,7 @@ pub fn new_index<'gc>(
             let v = table.get_value(ctx, key);
             if !v.is_nil() {
                 // If the value is present in the table, then we do not invoke the metamethod.
-                table.set_raw(&ctx, key, value)?;
+                table.set_raw(ctx, key, value)?;
                 return Ok(None);
             }
 
@@ -313,7 +325,7 @@ pub fn new_index<'gc>(
             if idx.is_nil() {
                 // If we do not have a __newindex metamethod, then just set the table value
                 // directly.
-                table.set_raw(&ctx, key, value)?;
+                table.set_raw(ctx, key, value)?;
                 return Ok(None);
             }
 

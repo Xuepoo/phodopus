@@ -85,10 +85,10 @@ To reconcile sandbox guarantees with upstream progress, Phodopus adopts a four-s
                              │
                              ▼
 ┌──────────────────────────────────────────────────────────┐
-│ Stage 2: Abstract Allocation Accounting Boundary         │
-│ - Decouple VM code from direct MetricsAlloc internals    │
-│ - Introduce internal MemoryQuota & AllocationTracker     │
-│ - Ensure VM can switch allocator backends cleanly        │
+│ Stage 2: MemoryLimit quota boundary (Landed)             │
+│ - Shared MemoryLimit keyed to gc-arena Metrics           │
+│ - Fallible table/string growth + GC-on-exceed            │
+│ - Internal Gc-box allocation still outside the check     │
 └────────────────────────────┬─────────────────────────────┘
                              │
                              ▼
@@ -114,20 +114,30 @@ To reconcile sandbox guarantees with upstream progress, Phodopus adopts a four-s
 - Maintain `allocator-api2 = "0.2"` in `[workspace.dependencies]`.
 - Enforce the Dependabot rule in `.github/dependabot.yml` ignoring `allocator-api2` and `gc-arena` semver-major updates.
 
-### Stage 2: Memory Accounting Abstraction (Phase 2-3)
+### Stage 2: Memory Accounting Abstraction (Phase 3, landed)
 
-Introduce a dedicated `MemoryQuota` trait in `phodopus`:
+Phodopus implements a shared `MemoryLimit { max_bytes, current_bytes }` (see
+`crates/phodopus/src/memory.rs`) rather than the illustrative `MemoryBudget` trait sketched in an
+earlier draft. `MemoryLimit` is integrated with `gc-arena`'s `Metrics`: the current byte count is
+the arena's tracked `Metrics::total_allocation()`, and the ceiling is shared between the `Lua`
+handle, the arena root, and every allocation-boundary check.
 
-```rust
-pub trait MemoryBudget: 'static {
-    fn reserve(&self, bytes: usize) -> Result<(), MemoryLimitExceeded>;
-    fn release(&self, bytes: usize);
-    fn current_usage(&self) -> usize;
-    fn limit(&self) -> Option<usize>;
-}
-```
+Quota enforcement happens at the boundaries Phodopus controls:
 
-By routing all table, string, and thread allocations through this abstraction, Phodopus isolates its hard quota enforcement from the underlying GC library's allocator choice.
+- every Lua table array/map growth calls `Context::check_memory` with the amortized growth request
+  _before_ reserving, and switches from the infallible `Vec`/hashbrown growth to the fallible
+  `try_reserve` path so a refused request returns a typed `OutOfMemory` instead of aborting;
+- large standard-library string buffers (for example `string.rep`) are pre-checked before
+  allocation;
+- `Lua::execute`/`Lua::finish` check the arena between executor steps and run a full incremental
+  collection when it is at or above the ceiling.
+
+The remaining limitation is documented rather than hidden: `gc-arena 0.5.3` does not route its
+internal `Gc`-box allocation through an application allocator, so a check cannot literally
+intercept every internal `Gc::new`. The runtime-boundary checks cover the documented
+Denial-of-Service constructs and are recoverable (a `pcall` catches the refusal while recovery
+memory remains). Moving the check into the internal allocator itself remains part of the Stage 4
+compatibility-fork or upstream-PR work.
 
 ### Stage 3 & 4: Upstream Tracking or Compatibility Fork
 

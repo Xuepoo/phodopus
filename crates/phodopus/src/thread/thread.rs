@@ -735,7 +735,7 @@ impl<'gc, 'a> LuaFrame<'gc, 'a> {
     /// `count` elements following this.
     pub(super) fn set_table_list(
         &mut self,
-        mc: &Mutation<'gc>,
+        ctx: Context<'gc>,
         table_base: RegisterIndex,
         count: VarCount,
     ) -> Result<(), VMError> {
@@ -775,9 +775,7 @@ impl<'gc, 'a> LuaFrame<'gc, 'a> {
         for i in 0..set_count {
             if let Some(inc) = start.checked_add(1) {
                 start = inc;
-                table
-                    .set_raw(mc, inc.into(), self.state.stack[table_ind + 2 + i])
-                    .unwrap();
+                table.set_raw(ctx, inc.into(), self.state.stack[table_ind + 2 + i])?;
             } else {
                 break;
             }

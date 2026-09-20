@@ -1,3 +1,17 @@
+use thiserror::Error;
+
+/// Returned when a runtime-level Fuel budget configured through
+/// [`RuntimeBuilder::fuel_limit`](crate::RuntimeBuilder::fuel_limit) is exhausted.
+///
+/// The executor state remains valid; the caller may inspect the thread and resume with an
+/// explicit budget via [`Lua::execute_with_fuel`](crate::Lua::execute_with_fuel).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[error("fuel exhausted: the {limit} unit execution budget was consumed before completion")]
+pub struct FuelExhausted {
+    /// The configured total budget, in Fuel units.
+    pub limit: i32,
+}
+
 /// A counter for tracking the amount of time spent in `Executor::step` and in callbacks.
 ///
 /// The fuel unit is *approximately* one VM instruction, but this is just a rough estimate

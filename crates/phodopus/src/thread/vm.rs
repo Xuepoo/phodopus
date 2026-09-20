@@ -155,7 +155,7 @@ pub(super) fn run_vm<'gc>(
             }
 
             Operation::SetList { base, count } => {
-                lua_frame.set_table_list(&ctx, base, count)?;
+                lua_frame.set_table_list(ctx, base, count)?;
                 registers = lua_frame.registers();
             }
 

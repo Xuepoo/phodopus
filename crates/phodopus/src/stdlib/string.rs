@@ -244,6 +244,10 @@ pub fn load_string<'gc>(ctx: Context<'gc>) {
             // work is still accounted deterministically.
             exec.fuel().consume(sandbox::output_cost(capacity));
 
+            // Refuse under the hard memory quota *before* allocating the result
+            // buffer, so an oversized repeat fails cleanly instead of aborting.
+            ctx.check_memory(capacity)?;
+
             let mut result = Vec::with_capacity(capacity);
             result.extend_from_slice(s_bytes);
             if sep_bytes.is_empty() {
