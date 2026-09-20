@@ -168,10 +168,13 @@ pub struct MemoryLimit {
 ```
 
 1. **Quota Enforcement**:
-   - A quota check runs immediately before the runtime grows a Lua table (array and map parts) or
-     builds a large string buffer. It computes the byte request with checked arithmetic and refuses
-     if `current_bytes + requested > max_bytes` (see `crates/phodopus/src/memory.rs` and
-     `crates/phodopus/src/table/raw.rs`).
+   - A quota check runs immediately before the runtime allocates one of the quota-controlled
+     collections: a Lua table constructor's initial array/map capacity (`{...}`, via
+     `Table::try_new`), every later table array/map growth, a `..` / `table.concat` result buffer,
+     and large standard-library string buffers such as `string.rep`. It computes the byte request
+     with checked arithmetic and refuses if `current_bytes + requested > max_bytes` (see
+     `crates/phodopus/src/memory.rs`, `crates/phodopus/src/table/raw.rs`, and
+     `crates/phodopus/src/meta_ops.rs`).
    - When the arena reaches the ceiling at a GC boundary, a full incremental collection is run
      before execution continues, so garbage is reclaimed before the runtime gives up.
    - If memory remains insufficient after collection, the operation fails with a clean
@@ -185,11 +188,25 @@ pub struct MemoryLimit {
 
 **Enforcement points (honest scope).** Phodopus `gc-arena 0.5.3` does not route `Gc`-box
 allocations through an application allocator, so a quota cannot literally intercept every internal
-`Gc::new`. The quota is therefore enforced at the boundaries Phodopus controls: every Lua table
-array/map growth and large standard-library string buffer is checked _before_ allocation, and the
-whole arena is checked and collected at execution boundaries. This refuses the documented
-Denial-of-Service constructs (`local t = {}; while true do t = {t} end` and unbounded string
-growth) with a recoverable error while leaving internal runtime bookkeeping outside the accounting.
+`Gc::new`. The quota is therefore enforced at the boundaries Phodopus controls, each checked
+_before_ the allocation that would cross the ceiling:
+
+- the `{...}` table constructor, charged for its initial array and map capacity before either part
+  is allocated (`Table::try_new`, called from the `NewTable` opcode);
+- every subsequent table array/map growth, charged for the amortized growth request before the
+  fallible reserve;
+- the `..` operator and `table.concat`, charged for the projected result size before the result
+  buffer is allocated;
+- large standard-library string buffers such as `string.rep`.
+
+The whole arena is additionally checked and collected at execution boundaries. Together these
+refuse the documented Denial-of-Service constructs with a recoverable typed `OutOfMemory`:
+the `{t}` constructor chain (`local t = {}; while true do t = {t} end`) and unbounded string growth
+(`s = s .. s`), both as the rooted form that keeps the chain live and as the form whose
+intermediate tables become garbage. What remains outside the per-allocation check is internal
+runtime bookkeeping and the `Gc` box headers themselves; those allocations are bounded by the
+GC-boundary check (the arena is collected once its tracked total reaches the ceiling) rather than
+refused individually, because `Gc::new` has no application-controlled failure channel in `0.5.3`.
 A future `gc-arena` upgrade or compatibility fork (see
 [Garbage Collector Strategy](../architecture/gc-strategy.md)) may move the check into the internal
 allocator itself.
@@ -211,12 +228,13 @@ allocator itself.
 4. **Checked Output Ceiling Tests**: assert a hostile `string.format "%s%s"` over 16 MiB and a hostile `gsub` replacement over 16 MiB both fail via `pcall` with `"resulting string too large"` and no allocation blowup.
 5. **Memory Ceiling Test** (`crates/phodopus/tests/memory_quota.rs`): configure an 8 MiB quota; allocate large string arrays and grow large tables; assert a clean `OutOfMemory` error without native abort or memory corruption.
 6. **OOM Recovery Tests** (`crates/phodopus/tests/memory_quota.rs`): assert `pcall` catches a quota refusal while recovery memory remains, the runtime is usable afterwards, a low quota refuses allocation (not merely measures it), and the `OutOfMemory` payload is reachable through the host error chain.
+7. **DoS Construct Refusal Tests** (`crates/phodopus/tests/memory_quota.rs`): under a small quota, assert the `{t}` table-constructor chain (rooted and unrooted) and repeated `..` / `table.concat` growth are refused with a typed `OutOfMemory` and no panic or abort, and that the tracked total stays bounded at the ceiling.
 
 ---
 
 ## 7. Acceptance Criteria
 
 - Every standard library callback either consumes proportional Fuel or is proven constant-bounded with a documented justification (§4.1.1, §4.1.3).
-- `RuntimeBuilder::fuel_limit(n)` and `RuntimeBuilder::memory_limit(bytes)` configure strict runtime limits. `RuntimeBuilder` is the host-facing alias of `LuaBuilder`, reached through `Lua::builder()`. The memory limit installs a hard heap ceiling (checked before table growth and large string buffers, with GC-on-exceed and a typed `OutOfMemory`); the fuel limit is a total per-execution budget enforced by `Lua::execute` and replenished through `Lua::execute_with_fuel`.
+- `RuntimeBuilder::fuel_limit(n)` and `RuntimeBuilder::memory_limit(bytes)` configure strict runtime limits. `RuntimeBuilder` is the host-facing alias of `LuaBuilder`, reached through `Lua::builder()`. The memory limit installs a hard heap ceiling (checked before table constructors, table growth, `..`/`table.concat` result buffers, and large string buffers, with GC-on-exceed and a typed `OutOfMemory`); the fuel limit is a total per-execution budget enforced by `Lua::execute` and replenished through `Lua::execute_with_fuel`.
 - Zero occurrences of native panics when scripts exceed execution bounds.
 - Unit and integration tests covering Fuel exhaustion, variable-cost interruption, checked output ceilings, and OOM recovery pass 100% green.

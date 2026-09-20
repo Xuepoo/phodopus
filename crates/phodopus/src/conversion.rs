@@ -117,13 +117,36 @@ where
     }
 }
 
+/// Build a sequence table for a host-side slice-like value of known `len`.
+///
+/// The array part is reserved for the *whole* sequence before the first element is written, so a
+/// hard-quota refusal cannot leave the table partially filled. `IntoValue` is infallible by trait
+/// design, so a refusal cannot be returned to the caller; it is a panic on an explicit invariant
+/// (the reservation succeeded, therefore every in-range array write below also succeeds) rather
+/// than an unwrap of a per-element result that could fire mid-sequence.
+fn sequence_table<'gc>(
+    ctx: Context<'gc>,
+    len: usize,
+    elems: impl IntoIterator<Item = Value<'gc>>,
+) -> Table<'gc> {
+    let table = Table::new(&ctx);
+    if len > 0 {
+        table
+            .reserve_array_through(ctx, len - 1)
+            .expect("hard memory quota refused a host sequence conversion");
+    }
+    for (i, value) in elems.into_iter().enumerate() {
+        table
+            .set_raw(ctx, (i as i64 + 1).into(), value)
+            .expect("array was pre-reserved for the whole sequence");
+    }
+    table
+}
+
 impl<'gc, T: IntoValue<'gc>> IntoValue<'gc> for Vec<T> {
     fn into_value(self, ctx: Context<'gc>) -> Value<'gc> {
-        let table = Table::new(&ctx);
-        for (i, v) in self.into_iter().enumerate() {
-            table.set(ctx, i64::try_from(i).unwrap() + 1, v).unwrap();
-        }
-        table.into()
+        let len = self.len();
+        sequence_table(ctx, len, self.into_iter().map(|v| v.into_value(ctx))).into()
     }
 }
 
@@ -132,11 +155,7 @@ where
     &'a T: IntoValue<'gc>,
 {
     fn into_value(self, ctx: Context<'gc>) -> Value<'gc> {
-        let table = Table::new(&ctx);
-        for (i, v) in self.iter().enumerate() {
-            table.set(ctx, i64::try_from(i).unwrap() + 1, v).unwrap();
-        }
-        table.into()
+        sequence_table(ctx, self.len(), self.iter().map(|v| v.into_value(ctx))).into()
     }
 }
 
@@ -145,11 +164,7 @@ where
     T: IntoValue<'gc>,
 {
     fn into_value(self, ctx: Context<'gc>) -> Value<'gc> {
-        let table = Table::new(&ctx);
-        for (i, v) in self.into_iter().enumerate() {
-            table.set(ctx, i64::try_from(i).unwrap() + 1, v).unwrap();
-        }
-        table.into()
+        sequence_table(ctx, N, self.into_iter().map(|v| v.into_value(ctx))).into()
     }
 }
 

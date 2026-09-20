@@ -119,8 +119,20 @@ impl<'gc> RawTable<'gc> {
     }
 
     /// Conservative per-entry byte charge for the map part, including a control byte.
-    fn map_entry_bytes() -> usize {
+    pub(crate) fn map_entry_bytes() -> usize {
         mem::size_of::<(Key<'gc>, Value<'gc>)>() + 1
+    }
+
+    /// Bytes the given initial capacities reserve for the array and map parts.
+    ///
+    /// Used by [`Table::try_new`](crate::Table::try_new) to charge a table constructor's storage
+    /// to the hard quota *before* either `MetricsAlloc` vector or hashbrown table is built. The
+    /// estimate is conservative (it does not model hashbrown's power-of-two bucket rounding); the
+    /// next construction observes the true tracked total, so any rounding slack cannot accumulate.
+    pub(crate) fn with_capacity_bytes(array_capacity: usize, map_capacity: usize) -> usize {
+        array_capacity
+            .saturating_mul(mem::size_of::<Value<'gc>>())
+            .saturating_add(map_capacity.saturating_mul(Self::map_entry_bytes()))
     }
 
     /// Ensure the array part can hold `additional` more elements, refusing cleanly on quota
@@ -599,6 +611,24 @@ impl<'gc> RawTable<'gc> {
             true
         });
         Ok(())
+    }
+
+    /// Ensure the array part can hold the 0-based index `end_index` (inclusive), refusing cleanly
+    /// on quota exhaustion.
+    ///
+    /// Used to make a batch store atomic with respect to the quota: once the array covers the whole
+    /// range, every subsequent [`RawTable::set`] for those keys is a plain array replacement that
+    /// cannot grow (and therefore cannot fail partway through the batch).
+    pub(crate) fn try_reserve_array_through(
+        &mut self,
+        ctx: Context<'gc>,
+        end_index: usize,
+    ) -> Result<(), TableError> {
+        if end_index < self.array.len() {
+            return Ok(());
+        }
+        let additional = end_index.saturating_add(1).saturating_sub(self.array.len());
+        self.try_grow_array(ctx, additional)
     }
 
     /// Reserve space in the map part of the table for at least `additional` more elements.

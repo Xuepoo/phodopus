@@ -772,6 +772,24 @@ impl<'gc, 'a> LuaFrame<'gc, 'a> {
 
         self.fuel
             .consume(count_fuel(Self::FUEL_PER_ITEM, set_count));
+
+        // Pre-reserve the whole batch before storing any of it. The constructor's array part is
+        // sized by the compiler (`array_size`); a variable-length sequence (`{f()}`) can exceed it,
+        // and reserving lazily inside the loop would let a quota refusal leave the table partially
+        // filled while the frame pops. Reserving up front makes the batch atomic: a refusal happens
+        // before the first store, and every store after it is an in-range array replacement that
+        // cannot grow, so it cannot fail.
+        if let Some(last) = start
+            .checked_add(set_count as i64)
+            .filter(|_| set_count > 0)
+        {
+            if let Ok(end_index) = usize::try_from(last - 1) {
+                table
+                    .reserve_array_through(ctx, end_index)
+                    .map_err(VMError::from)?;
+            }
+        }
+
         for i in 0..set_count {
             if let Some(inc) = start.checked_add(1) {
                 start = inc;

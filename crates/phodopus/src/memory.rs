@@ -6,11 +6,25 @@
 //! is reported by `Metrics::total_allocation()`, which is the authoritative "current" value the
 //! quota is checked against.
 //!
-//! Enforcement is performed at allocation boundaries in the runtime: before a table, string, or
-//! thread collection grows, the runtime calls [`Context::check_memory`](crate::Context::check_memory),
-//! which refuses with a typed [`OutOfMemory`] error when the requested bytes would push the arena
-//! above the configured ceiling. Refusal happens *before* the growth is attempted, so no native
-//! abort, `handle_alloc_error`, or partially-initialized value can occur.
+//! Enforcement is performed at allocation boundaries in the runtime. Before one of these growth
+//! paths allocates, it calls [`Context::check_memory`](crate::Context::check_memory), which refuses
+//! with a typed [`OutOfMemory`] when the requested bytes would push the arena above the configured
+//! ceiling:
+//!
+//! * every Lua table constructor (`{...}`), charged for its initial array and map capacity *before*
+//!   either part is allocated (`Table::try_new`);
+//! * every table array/map growth, charged for the amortized growth request before the fallible
+//!   reserve (`RawTable::try_reserve_array` / `try_reserve_map`);
+//! * `..` / `table.concat` result buffers, charged for the projected size before `Vec::with_capacity`
+//!   (`meta_ops::concat_many` / `concat_separated`);
+//! * large standard-library string buffers such as `string.rep` (`stdlib::string`).
+//!
+//! The check runs *before* the growth is attempted, so the documented quota paths cannot trigger a
+//! native abort, `handle_alloc_error`, or a partially-initialized value. It is not a literal
+//! interception of every internal `Gc::new`: `gc-arena 0.5.3` does not route `Gc`-box allocation
+//! through an application allocator, so the remaining `Gc`-box and bookkeeping allocations are
+//! bounded at the GC boundary (collected when the tracked total reaches the ceiling) rather than
+//! refused individually. See the scope note in `docs/specifications/sandbox-and-fuel.md` §4.2.
 //!
 //! The ceiling is optional: [`MemoryLimit::new(None)`](MemoryLimit::new) means "unbounded", which
 //! preserves the historical measuring-only behavior.

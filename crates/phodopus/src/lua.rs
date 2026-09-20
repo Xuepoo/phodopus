@@ -8,7 +8,8 @@ use gc_arena::{
 
 use crate::{
     Error, ExternError, FromMultiValue, FromValue, Fuel, FuelExhausted, IntoValue, OutOfMemory,
-    Registry, RuntimeError, Singleton, StashedExecutor, String, Table, TypeError, Value,
+    Registry, RuntimeError, Singleton, StashedExecutor, String, Table, TableError, TypeError,
+    Value,
     finalizers::Finalizers,
     memory::MemoryLimit,
     stash::{Fetchable, Stashable},
@@ -116,6 +117,16 @@ impl<'gc> Context<'gc> {
     // Calls `ctx.globals().set_field(key, value)`
     pub fn set_global<V: IntoValue<'gc>>(self, key: &'static str, value: V) -> Value<'gc> {
         self.state.globals.set_field(self, key, value)
+    }
+
+    /// Fallible variant of [`Context::set_global`] that returns a typed refusal instead of
+    /// panicking when a hard memory quota is installed and the write would cross it.
+    pub fn try_set_global<V: IntoValue<'gc>>(
+        self,
+        key: &'static str,
+        value: V,
+    ) -> Result<Value<'gc>, TableError> {
+        self.state.globals.try_set_field(self, key, value)
     }
 
     /// Calls `ctx.registry().singleton::<S>(ctx)`.

@@ -574,8 +574,9 @@ impl<'gc> Sequence<'gc> for RequireSequence<'gc> {
                 match stack.get(0) {
                     Value::Function(function) => {
                         // Sentinel: mark the module as loading before invoking
-                        // the loader so a circular require sees `true`.
-                        self.loaded.set(ctx, self.name, true).unwrap();
+                        // the loader so a circular require sees `true`. A hard quota refusal is
+                        // propagated as a typed `OutOfMemory` rather than panicking.
+                        self.loaded.set(ctx, self.name, true).map_err(Error::from)?;
                         self.phase = RequirePhase::Loading;
                         stack.replace(ctx, self.name);
                         Ok(SequencePoll::Call {
@@ -606,7 +607,9 @@ impl<'gc> Sequence<'gc> for RequireSequence<'gc> {
                 } else {
                     value
                 };
-                self.loaded.set(ctx, self.name, module).unwrap();
+                self.loaded
+                    .set(ctx, self.name, module)
+                    .map_err(Error::from)?;
                 stack.replace(ctx, module);
                 Ok(SequencePoll::Return)
             }
@@ -625,7 +628,9 @@ impl<'gc> Sequence<'gc> for RequireSequence<'gc> {
         // finished loading. Clearing the cache entry lets a caller retry after
         // fixing the module.
         if matches!(self.phase, RequirePhase::Loading) {
-            self.loaded.set(ctx, self.name, Value::Nil).unwrap();
+            // Best-effort cleanup: setting a `Nil` value removes a map entry and cannot allocate,
+            // so this cannot fail; ignore a refusal defensively without masking the real error.
+            let _ = self.loaded.set(ctx, self.name, Value::Nil);
         }
         Err(error)
     }

@@ -5,7 +5,6 @@ use crate::{
     Closure, Constant, Context, Function, String, Table, Value,
     meta_ops::{self, ConcatMetaResult, MetaResult},
     opcode::{Operation, RCIndex},
-    table::RawTable,
     thread::thread::MetaReturn,
     types::{RegisterIndex, UpValueDescriptor, VarCount},
 };
@@ -78,11 +77,10 @@ pub(super) fn run_vm<'gc>(
                 array_size,
                 map_size,
             } => {
-                let table = Table::from_parts(
-                    &ctx,
-                    RawTable::with_capacity(&ctx, array_size as usize, map_size as usize),
-                    None,
-                );
+                // Hard-quota check *before* the table parts are allocated, so a constructor chain
+                // such as `local t = {}; while true do t = {t} end` is refused cleanly rather than
+                // being built and only measured afterwards.
+                let table = Table::try_new(ctx, array_size as usize, map_size as usize)?;
                 registers.stack_frame[dest.0 as usize] = Value::Table(table);
             }
 

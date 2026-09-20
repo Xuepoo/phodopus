@@ -44,7 +44,7 @@ pub use self::{
         StashedString, StashedTable, StashedThread, StashedUserData, StashedValue,
     },
     string::String,
-    table::Table,
+    table::{Table, TableError},
     thread::{Execution, Executor, ExecutorMode, Thread, ThreadMode},
     userdata::UserData,
     value::Value,

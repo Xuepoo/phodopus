@@ -122,11 +122,15 @@ earlier draft. `MemoryLimit` is integrated with `gc-arena`'s `Metrics`: the curr
 the arena's tracked `Metrics::total_allocation()`, and the ceiling is shared between the `Lua`
 handle, the arena root, and every allocation-boundary check.
 
-Quota enforcement happens at the boundaries Phodopus controls:
+Quota enforcement happens at the boundaries Phodopus controls, each _before_ the allocation:
 
-- every Lua table array/map growth calls `Context::check_memory` with the amortized growth request
-  _before_ reserving, and switches from the infallible `Vec`/hashbrown growth to the fallible
-  `try_reserve` path so a refused request returns a typed `OutOfMemory` instead of aborting;
+- every Lua table constructor (`{...}`) charges its initial array/map capacity through
+  `Table::try_new` before either part is allocated;
+- every subsequent table array/map growth calls `Context::check_memory` with the amortized growth
+  request _before_ reserving, and switches from the infallible `Vec`/hashbrown growth to the
+  fallible `try_reserve` path so a refused request returns a typed `OutOfMemory` instead of
+  aborting;
+- `..` and `table.concat` charge the projected result size before allocating the result buffer;
 - large standard-library string buffers (for example `string.rep`) are pre-checked before
   allocation;
 - `Lua::execute`/`Lua::finish` check the arena between executor steps and run a full incremental
@@ -134,10 +138,12 @@ Quota enforcement happens at the boundaries Phodopus controls:
 
 The remaining limitation is documented rather than hidden: `gc-arena 0.5.3` does not route its
 internal `Gc`-box allocation through an application allocator, so a check cannot literally
-intercept every internal `Gc::new`. The runtime-boundary checks cover the documented
-Denial-of-Service constructs and are recoverable (a `pcall` catches the refusal while recovery
-memory remains). Moving the check into the internal allocator itself remains part of the Stage 4
-compatibility-fork or upstream-PR work.
+intercept every internal `Gc::new`. The runtime-boundary checks refuse the documented
+Denial-of-Service constructs (`{t}` constructor chains and unbounded `..` growth, rooted or not)
+and are recoverable (a `pcall` catches the refusal while recovery memory remains); the residual
+`Gc`-box and bookkeeping allocation is bounded at the GC boundary rather than refused individually.
+Moving the check into the internal allocator itself remains part of the Stage 4 compatibility-fork
+or upstream-PR work.
 
 ### Stage 3 & 4: Upstream Tracking or Compatibility Fork
 

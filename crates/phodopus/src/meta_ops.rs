@@ -831,6 +831,11 @@ pub fn concat_many<'gc>(
             break 'fast;
         };
 
+        // Refuse under the hard memory quota *before* allocating the result buffer. This is the
+        // "unbounded string growth" clause: a script that repeatedly doubles a string with `..`
+        // is stopped here with a typed `OutOfMemory` instead of growing without bound.
+        ctx.check_memory(len)?;
+
         let mut bytes = Vec::with_capacity(len);
         for value in values {
             match value {
@@ -890,6 +895,10 @@ pub fn concat_separated<'gc>(
             .checked_mul(sep_str.len() as usize)
             .and_then(|l| l.checked_add(len))
             .ok_or(MetaOperatorError::ConcatOverflow)?;
+
+        // Refuse under the hard memory quota *before* allocating the result buffer, matching the
+        // unseparated concatenation path and `string.rep`.
+        ctx.check_memory(total_len)?;
 
         // Should this be allocated in-place in the GC heap?
         let mut bytes = Vec::with_capacity(total_len);

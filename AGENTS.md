@@ -111,8 +111,15 @@
   (such as Tokio in Bitty) to drive futures and resume coroutines via a
   trampoline; this interface is Phase 4 target state and is not yet implemented.
 - **Sandboxing & Fuel**: Execution is deterministic and preemptible by
-  instruction Fuel today; bounding by hard memory quotas is Phase 3 target state
-  and is not yet implemented (memory is currently measured, not refused).
+  instruction Fuel today. A hard heap quota is implemented
+  (`RuntimeBuilder::memory_limit`): it is refused with a typed `OutOfMemory`
+  before a table constructor's initial storage, any later table array/map
+  growth, a `..`/`table.concat` result buffer, or a large `string.rep` buffer is
+  allocated, and the arena is checked and collected at execution boundaries.
+  Internal `Gc`-box allocation is still only bounded at that GC boundary (a
+  `gc-arena` 0.5.3 limitation), so the quota is not a literal interception of
+  every allocation; the exact covered paths are the honest scope note in
+  `docs/specifications/sandbox-and-fuel.md` §4.2.
 - **Native Lua Patterns**: String pattern matching implements authentic Lua
   patterns (via PR #129 adaptation) rather than generic Rust regex syntax.
 - **No Hardcoded Values**: Never hardcode host/environment values: absolute

@@ -10,7 +10,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use phodopus::{
     Closure, Executor, ExternError, Fuel, Lua, MemoryLimit, OutOfMemory, RuntimeBuilder,
-    StashedExecutor,
+    StashedExecutor, Table,
 };
 
 /// The quota used by the headline 8 MiB memory-ceiling test.
@@ -75,6 +75,217 @@ fn eight_mib_quota_refuses_large_string_allocation() -> Result<(), ExternError> 
     let small = start(&mut lua, "return 1 + 1");
     assert_eq!(lua.execute::<i64>(&small)?, 2);
     Ok(())
+}
+
+/// The headline Denial-of-Service construct from the sandbox specification §4.2/§5 — the `{t}`
+/// table-constructor chain — must be *refused* by the hard quota, not merely measured.
+///
+/// Both the rooted form (`_G.root = t`, which keeps the chain live) and the non-rooted form (where
+/// the old table becomes garbage) must stop with a typed `OutOfMemory`; the non-rooted form is the
+/// one that previously overshot silently because nothing forced a GC between constructor steps.
+#[test]
+fn quota_refuses_table_constructor_chain() -> Result<(), ExternError> {
+    // A deliberately small quota: the chain crosses it after a handful of constructors, long
+    // before the process could allocate tens of megabytes.
+    const SMALL_QUOTA: usize = 2 * 1024 * 1024;
+    let mut lua = Lua::builder().memory_limit(SMALL_QUOTA).build();
+
+    let executor = start(
+        &mut lua,
+        r#"
+            local t = {}
+            for i = 1, 500000 do
+                t = { t }
+            end
+            _G.root = t
+            return "reached-end"
+        "#,
+    );
+
+    let caught = catch_unwind(AssertUnwindSafe(|| lua.execute::<String>(&executor)));
+    let result = caught.expect("quota refusal must not unwind the host thread");
+    let error = result.expect_err("the {t} constructor chain must be refused");
+    let oom = oom_from(&error).expect("failure must be a typed OutOfMemory");
+
+    assert_eq!(oom.limit, SMALL_QUOTA);
+    // Evidence that the refusal is a real hard bound, not a refusal-at-the-boundary measurement:
+    // the tracked total never exceeds the quota by more than one constructor's own allocation.
+    let observed = lua.total_memory();
+    assert!(
+        observed <= SMALL_QUOTA + 4096,
+        "tracked total {observed} exceeded the {SMALL_QUOTA} byte quota"
+    );
+
+    // The runtime remains usable after the refusal.
+    let small = start(&mut lua, "local t = {}; t[1] = 1; return t[1]");
+    assert_eq!(lua.execute::<i64>(&small)?, 1);
+    Ok(())
+}
+
+/// The same chain without rooting the result: the abandoned tables are unreachable immediately, so
+/// the quota must still refuse rather than letting the collector-less growth overshoot.
+#[test]
+fn quota_refuses_unrooted_table_constructor_chain() -> Result<(), ExternError> {
+    const SMALL_QUOTA: usize = 2 * 1024 * 1024;
+    let mut lua = Lua::builder().memory_limit(SMALL_QUOTA).build();
+
+    let executor = start(
+        &mut lua,
+        r#"
+            local t = {}
+            for i = 1, 500000 do
+                t = { t }
+            end
+            return "reached-end"
+        "#,
+    );
+
+    let result = lua.execute::<String>(&executor);
+    let error = result.expect_err("the unrooted {t} chain must be refused");
+    let oom = oom_from(&error).expect("failure must be a typed OutOfMemory");
+    assert_eq!(oom.limit, SMALL_QUOTA);
+    assert!(
+        lua.total_memory() <= SMALL_QUOTA + 4096,
+        "tracked total {} stayed well above the quota",
+        lua.total_memory()
+    );
+    Ok(())
+}
+
+/// The "unbounded string growth" clause: repeated `..` concatenation must be refused by the hard
+/// quota with a typed `OutOfMemory`, before the result buffer is allocated.
+#[test]
+fn quota_refuses_concat_growth() -> Result<(), ExternError> {
+    const SMALL_QUOTA: usize = 2 * 1024 * 1024;
+    let mut lua = Lua::builder().memory_limit(SMALL_QUOTA).build();
+
+    // Doubling a string with `..` crosses a 2 MiB quota in ~10 iterations and would otherwise keep
+    // growing until the process ran out of memory.
+    let executor = start(
+        &mut lua,
+        r#"
+            local s = "x"
+            for i = 1, 40 do
+                s = s .. s
+            end
+            return #s
+        "#,
+    );
+
+    let caught = catch_unwind(AssertUnwindSafe(|| lua.execute::<i64>(&executor)));
+    let result = caught.expect("quota refusal must not unwind the host thread");
+    let error = result.expect_err("repeated concatenation must be refused");
+    let oom = oom_from(&error).expect("failure must be a typed OutOfMemory");
+    assert_eq!(oom.limit, SMALL_QUOTA);
+    assert!(
+        lua.total_memory() <= SMALL_QUOTA * 2,
+        "tracked total {} should be bounded near the quota",
+        lua.total_memory()
+    );
+
+    // The instance still works for a small concatenation afterwards.
+    let small = start(&mut lua, "return ('a' .. 'b')");
+    assert_eq!(lua.execute::<String>(&small)?, "ab");
+    Ok(())
+}
+
+/// The `table.concat` (separated concatenation) path shares the same pre-allocation check as the
+/// `..` operator.
+#[test]
+fn quota_refuses_table_concat_growth() -> Result<(), ExternError> {
+    const SMALL_QUOTA: usize = 2 * 1024 * 1024;
+    let mut lua = Lua::builder().memory_limit(SMALL_QUOTA).build();
+
+    let executor = start(
+        &mut lua,
+        r#"
+            local parts = {}
+            local chunk = string.rep("x", 64 * 1024)
+            for i = 1, 128 do parts[i] = chunk end
+            return #table.concat(parts, "-")
+        "#,
+    );
+
+    let result = lua.execute::<i64>(&executor);
+    let error = result.expect_err("table.concat over the quota must be refused");
+    let oom = oom_from(&error).expect("failure must be a typed OutOfMemory");
+    assert_eq!(oom.limit, SMALL_QUOTA);
+    Ok(())
+}
+
+/// A refused `{t}` constructor chain inside `pcall` must never abort the host. Whether Lua can
+/// catch it depends on whether recovery headroom remains (the refusal happens when the arena is at
+/// the ceiling), so the honest guarantee is: the host observes either a caught error or a clean
+/// typed `OutOfMemory`, never a panic or `handle_alloc_error`.
+#[test]
+fn constructor_chain_refusal_never_aborts_under_pcall() {
+    const SMALL_QUOTA: usize = 2 * 1024 * 1024;
+    let mut lua = Lua::builder().memory_limit(SMALL_QUOTA).build();
+
+    let executor = start(
+        &mut lua,
+        r#"
+            local ok = pcall(function()
+                local t = {}
+                for i = 1, 500000 do t = { t } end
+            end)
+            if ok then return "unexpected-success" end
+            return "recovered"
+        "#,
+    );
+
+    let caught = catch_unwind(AssertUnwindSafe(|| lua.execute::<String>(&executor)));
+    let result = caught.expect("a refused constructor chain must not unwind the host thread");
+    match result {
+        // Enough recovery headroom remained for `pcall` to materialize the error value.
+        Ok(value) => assert_eq!(value, "recovered"),
+        // Not enough headroom: the typed refusal propagates cleanly to the host instead.
+        Err(error) => {
+            let oom =
+                oom_from(&error).expect("the propagated failure must still be a typed OutOfMemory");
+            assert_eq!(oom.limit, SMALL_QUOTA);
+        }
+    }
+}
+
+/// The fallible host API (`Table::try_set_field` / `Context::try_set_global`) returns the typed
+/// refusal instead of panicking when a quota is installed and the write would grow a table.
+#[test]
+fn try_set_field_returns_typed_oom_under_quota() -> Result<(), ExternError> {
+    // A zero-byte ceiling makes any *growing* write refuse. A freshly created table has no array or
+    // map capacity, so its first field write must grow and is therefore refused; `Table::new`
+    // itself is unchecked, so this exercises the field write specifically.
+    let mut lua = Lua::builder().memory_limit(0).build();
+
+    lua.try_enter(|ctx| {
+        let table = Table::new(&ctx);
+        let err = table
+            .try_set_field(ctx, "host_field", 1i64)
+            .expect_err("a zero-byte ceiling must refuse a growing field write");
+        assert!(
+            err.is_out_of_memory(),
+            "the refusal must be a typed OutOfMemory, not a key error"
+        );
+        Ok(())
+    })
+}
+
+/// The raw `Table::set` path is also panic-free under a hard quota: it returns a typed refusal
+/// rather than unwinding, even when called directly from host code.
+#[test]
+fn table_set_under_quota_is_panic_free() {
+    let mut lua = Lua::builder().memory_limit(0).build();
+    let caught = catch_unwind(AssertUnwindSafe(|| {
+        lua.try_enter(|ctx| {
+            let table = Table::new(&ctx);
+            // A fresh table's first integer key forces array growth, which the zero-byte ceiling
+            // must refuse with `Err` rather than a panic.
+            let refused = table.set(ctx, 1i64, 1i64).is_err();
+            Ok(refused)
+        })
+    }));
+    let refused = caught.expect("table growth refusal must not unwind the host thread");
+    assert!(refused.expect("no typed leak"));
 }
 
 /// The quota must refuse table growth as well as string growth, proving the check is at the

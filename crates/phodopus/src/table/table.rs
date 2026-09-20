@@ -6,7 +6,7 @@ use std::{
 
 use gc_arena::{Collect, Gc, Mutation, lock::RefLock};
 
-use crate::{Context, FromValue, IntoValue, TypeError, Value};
+use crate::{Context, FromValue, IntoValue, OutOfMemory, TypeError, Value};
 
 use super::raw::{NextValue, RawTable, TableError};
 
@@ -55,6 +55,26 @@ impl<'gc> Table<'gc> {
         Self::from_parts(mc, RawTable::new(mc), None)
     }
 
+    /// Create a table whose array and map parts reserve the given capacities, refusing cleanly
+    /// when the reservation would push the arena above the configured hard quota.
+    ///
+    /// This is the quota-checked constructor used by the `{...}` table-constructor opcode. The
+    /// check runs *before* either part is allocated, so a hostile table-constructor chain is
+    /// refused with a typed [`OutOfMemory`] instead of being built and then measured. With no
+    /// quota configured the behavior is identical to [`Table::new`].
+    pub fn try_new(
+        ctx: Context<'gc>,
+        array_capacity: usize,
+        map_capacity: usize,
+    ) -> Result<Table<'gc>, OutOfMemory> {
+        ctx.check_memory(RawTable::with_capacity_bytes(array_capacity, map_capacity))?;
+        Ok(Self::from_parts(
+            &ctx,
+            RawTable::with_capacity(&ctx, array_capacity, map_capacity),
+            None,
+        ))
+    }
+
     pub fn from_parts(
         mc: &Mutation<'gc>,
         raw_table: RawTable<'gc>,
@@ -101,9 +121,12 @@ impl<'gc> Table<'gc> {
     /// A convenience method over [`Table::set`] for setting a string field of a table.
     ///
     /// It behaves exactly the same as [`Table::set`], except since this only accepts string keys,
-    /// we know it cannot possibly error on the key. A hard memory-quota refusal can still occur
-    /// and is surfaced as a panic here; trusted stdlib set-up paths call this before any quota is
-    /// installed, so a quota refusal cannot occur during normal construction.
+    /// a key error is impossible. A hard memory-quota refusal can still occur: when a ceiling is
+    /// installed and this write has to grow the table across it, the refusal is surfaced as a
+    /// panic. Trusted stdlib set-up paths call this before any quota is installed, so normal
+    /// construction cannot hit it; embedders that write fields while a quota is active should use
+    /// [`Table::try_set_field`], which returns the typed [`OutOfMemory`](crate::OutOfMemory)
+    /// instead.
     pub fn set_field<V: IntoValue<'gc>>(
         self,
         ctx: Context<'gc>,
@@ -111,7 +134,21 @@ impl<'gc> Table<'gc> {
         value: V,
     ) -> Value<'gc> {
         self.set(ctx, key, value)
-            .expect("static string key is valid")
+            .expect("static string key is valid and no quota refusal occurred")
+    }
+
+    /// Fallible variant of [`Table::set_field`] that returns the typed refusal instead of panicking.
+    ///
+    /// The only possible error is a key error (impossible for a static string) or a hard
+    /// memory-quota refusal, so this is the panic-free form for embedders writing fields while a
+    /// quota is installed.
+    pub fn try_set_field<V: IntoValue<'gc>>(
+        self,
+        ctx: Context<'gc>,
+        key: &'static str,
+        value: V,
+    ) -> Result<Value<'gc>, TableError> {
+        self.set(ctx, key, value)
     }
 
     /// Get a value from this table without any automatic type conversion.
@@ -127,6 +164,22 @@ impl<'gc> Table<'gc> {
         value: Value<'gc>,
     ) -> Result<Value<'gc>, TableError> {
         self.0.borrow_mut(&ctx).raw_table.set(ctx, key, value)
+    }
+
+    /// Ensure the array part can hold the 0-based index `end_index` (inclusive).
+    ///
+    /// Used by the VM to make a multi-element `SetList` batch atomic under the hard quota: the
+    /// whole range is reserved before any element is stored, so a refusal cannot leave the table
+    /// partially filled.
+    pub(crate) fn reserve_array_through(
+        self,
+        ctx: Context<'gc>,
+        end_index: usize,
+    ) -> Result<(), TableError> {
+        self.0
+            .borrow_mut(&ctx)
+            .raw_table
+            .try_reserve_array_through(ctx, end_index)
     }
 
     /// Returns a 'border' for this table.
