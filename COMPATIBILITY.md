@@ -230,3 +230,13 @@ implemented nor are there plans to implement due to differences between the impl
 | 🔵    | `traceback([thread,][message, level])`    |                                                                                                                                                                                                           |       |
 | ⚫️    | `upvalueid(f, n)`                         |                                                                                                                                                                                                           |       |
 | ⚫️    | `upvaluejoin(f1, n1, f2, n2)`             |                                                                                                                                                                                                           |       |
+
+## VM & Language Semantics
+
+| Status | Feature / Semantics | Differences | Notes |
+| ------ | ------------------- | ----------- | ----- |
+| 🔵     | Function parameter nil-fill | None | Unprovided parameters evaluate strictly to `nil`. Verified against upstream Piccolo Issue #145. |
+| 🔵     | Default parameter idiom (`param = param or default`) | None | Reliable under repeated calls, tail calls, and dirty stacks. |
+| 🔵     | Stack frame isolation | None | Registers from previous frames are zero-cost nil-filled via `resize(base + stack_size, Value::Nil)`. |
+| 🔵     | Tail calls (`return f(...)`) | None | Constant stack space tail calls supported; registers normalized on tail call push. |
+| 🔵     | Vararg alignment (`...`) | None | Correctly rotated via `rotate_right(var_params)`. When $N \le F$, `select('#', ...)` evaluates to 0. |

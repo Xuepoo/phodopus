@@ -82,6 +82,9 @@ Upstream Piccolo has valuable, mature pull requests that solve core runtime gaps
   - Add standard Lua 5.3/5.4 `utf8` library (`utf8.char`, `utf8.codes`, `utf8.codepoint`, `utf8.len`, `utf8.offset`).
 - [x] **PR #121: Backtrace & Source Diagnostics**:
   - Enhanced stack frame introspection and line-number error reporting via `debug.traceback`.
+- [x] **Issue #145: Stack Frame Safety & Nil-Fill Invariants**:
+  - Validated zero-cost parameter nil-fill and stack frame hygiene across regular calls, tail calls, generic-for loops, and metamethod calls.
+  - Documented stack layout, parameter alignment, and frame security invariants in [VM Stack Safety & Frame Invariants](vm-stack-safety.md).
 
 ### Phase 2: Sandboxed Module System (`require`)
 
