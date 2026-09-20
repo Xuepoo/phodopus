@@ -16,7 +16,7 @@ pub fn load_base<'gc>(ctx: Context<'gc>) {
 
     ctx.set_global(
         "tonumber",
-        Callback::from_fn(&ctx, |ctx, _, mut stack| {
+        Callback::from_fn(&ctx, |ctx, mut exec, mut stack| {
             use crate::compiler::string_utils::{read_neg, trim_whitespace};
 
             fn extract_number_data(bytes: &[u8]) -> (&[u8], bool) {
@@ -47,6 +47,9 @@ pub fn load_base<'gc>(ctx: Context<'gc>) {
                     Err("base out of range".into_value(ctx))?;
                 }
                 let (bytes, is_neg) = extract_number_data(s.as_bytes());
+                // Charge the digit scan proportionally.
+                exec.fuel()
+                    .consume(crate::stdlib::sandbox::scanned_cost(bytes.len()));
                 let result = bytes
                     .iter()
                     .map(|b| {

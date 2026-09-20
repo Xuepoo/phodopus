@@ -79,7 +79,84 @@ impl Fuel {
 }
 ```
 
+### 4.1.1 Variable-Cost Standard Library Callbacks
+
+A callback whose work is not fixed by the VM instruction count must charge that
+work against `Execution::fuel` proportionally. Phodopus uses one shared,
+deterministic model (`crates/phodopus/src/stdlib/sandbox.rs`):
+
+| Unit               | Fuel cost | Applied to                                                                                                                                                                      |
+| ------------------ | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Output byte        | `1`       | Every byte appended to a growing buffer (`format`, `gsub`, `utf8.char`, `string.sub`/`upper`/`lower`/`reverse`/`char`, `string.rep`, `table.concat`, `load` piecewise assembly) |
+| Scanned input byte | `1`       | Every byte examined by a scan (`utf8.len`/`codepoint`/`offset`/`codes`, `tonumber` with an explicit base)                                                                       |
+| Format directive   | `4`       | Each `string.format` conversion expanded                                                                                                                                        |
+| Pattern attempt    | `16`      | Each candidate start position tried by the pattern engine (`find`, `match`, `gmatch`, `gsub`)                                                                                   |
+| Format-string byte | `1`       | Each byte advanced over by `string.pack`/`unpack`/`packsize`                                                                                                                    |
+
+Operations that can exceed the wall slice of a single `Executor::step` are
+implemented as resumable `Sequence`s using the existing `SequencePoll`/`Frame::Sequence`
+mechanism. Each `poll` processes one batch sized from the remaining Fuel and
+returns `SequencePoll::Pending` when the slice is exhausted, preserving its
+cursor and partial output; replenishing Fuel resumes exactly where the previous
+poll stopped:
+
+- `string.format`, `string.rep`-style output assembly (`FormatSequence`);
+- `string.gsub` (`GsubSequence`);
+- `string.pack`, `string.unpack`, `string.packsize` (`PackSequence`,
+  `UnpackSequence`, `PacksizeSequence`);
+- `utf8.len`, `utf8.codepoint`, `utf8.offset` (`LenSequence`,
+  `CodepointSequence`, `OffsetSequence`).
+
+Operations that are proven constant-bounded remain one-shot but still charge
+their work:
+
+- `string.rep` computes the exact capacity with checked arithmetic and rejects
+  anything above `MAX_STRING_REP_BYTES` (16 MiB) **before** allocating; it then
+  charges one Fuel per output byte.
+- `string.pack`/`unpack`/`packsize` advance a byte cursor and can yield between
+  format options, so a long format string is preemptible.
+- `string.find`/`string.match`/`gmatch` perform at most one unanchored search
+  per call and charge `bytes + attempt bound`; the search engine call itself is
+  not preemptible below its `MAX_RECURSION_DEPTH` bound (see Residual Bounds).
+- `table.concat` copies the already-resident input values and charges one Fuel
+  per output byte; its size is bounded by the sum of its inputs.
+- `load` (piecewise function chunks) charges one Fuel per assembled byte, in
+  addition to the existing dynamic-compilation charge of one Fuel per 32 source
+  bytes in the string-chunk path.
+
+### 4.1.2 Checked Output Ceilings
+
+Independent of the (planned) global heap quota, every growing standard library
+buffer is bounded by `MAX_STDLIB_STRING_BYTES` (16 MiB). Before each append,
+`string.format`, `string.gsub`, and `utf8.char` compute the checked new length;
+overflow or a value above the ceiling raises a clean Lua error
+(`"resulting string too large"`) instead of allocating. `string.rep` and the
+pack family keep their existing 16 MiB operation ceilings.
+
+### 4.1.3 Residual Bounds (documented, not hidden)
+
+The following work is bounded but not preemptible mid-call, and is therefore
+charged up front rather than yielded out of:
+
+- A single `lsonar::engine::find_first_match` call: the engine recurses at most
+  `MAX_RECURSION_DEPTH` (500) levels and walks at most the remaining input
+  window, so one call is bounded by `O(remaining_bytes)` attempts. `gsub`
+  charges `remaining_window + 1` attempts per call and yields between matches;
+  `find`/`match`/`gmatch` charge the same bound for their single call.
+- Rust standard library formatting of one `string.format` directive
+  (`format_value`) is bounded by the parser's `MAX_WIDTH`/`MAX_PRECISION`
+  (1000) limits and the input string length.
+
+These bounds are the reason the model does not claim strict preemption _inside_ a
+single pattern search; the specification states the real bound instead of
+overclaiming.
+
 ### 4.2 Hard Memory Ceilings (`MemoryQuota`)
+
+> Status: **planned (not implemented)**. The allocator-side hard quota is the
+> subject of the separate memory-quota task. Until it lands, the only VM-wide
+> bound is the per-operation checked ceiling described in §4.1.2; the
+> observational `Lua::total_memory()` API does not enforce anything.
 
 Memory allocation within `gc-arena` utilizes a custom allocator tracking allocated bytes against a hard limit:
 
@@ -111,12 +188,15 @@ pub struct MemoryLimit {
 
 1. **Infinite Loop Test**: Run a tight loop with a 50,000 Fuel budget; assert execution halts precisely in `Interrupted` mode.
 2. **Replenishment Test**: Replenish 20,000 Fuel to an interrupted VM; assert execution resumes and advances.
-3. **Memory Ceiling Test**: Configure an 8 MiB quota; allocate large string arrays; assert clean `OutOfMemory` error without native abort or memory corruption.
+3. **Variable-Cost Interruption Tests** (`crates/phodopus/tests/fuel_stdlib.rs`): under a small Fuel budget, assert `string.format`, `string.gsub`, `utf8.len`, and `string.pack`/`unpack` are interrupted at least once and produce the same result as an uninterrupted run (state preserved and resumable).
+4. **Checked Output Ceiling Tests**: assert a hostile `string.format "%s%s"` over 16 MiB and a hostile `gsub` replacement over 16 MiB both fail via `pcall` with `"resulting string too large"` and no allocation blowup.
+5. **Memory Ceiling Test** (planned): configure an 8 MiB quota; allocate large string arrays; assert clean `OutOfMemory` error without native abort or memory corruption.
 
 ---
 
 ## 7. Acceptance Criteria
 
-- `RuntimeBuilder::fuel_limit(n)` and `RuntimeBuilder::memory_limit(bytes)` configure strict runtime limits.
+- Every standard library callback either consumes proportional Fuel or is proven constant-bounded with a documented justification (§4.1.1, §4.1.3).
+- `RuntimeBuilder::fuel_limit(n)` and `RuntimeBuilder::memory_limit(bytes)` configure strict runtime limits. _(Fuel limit is available on `Fuel`; the builder-level APIs remain part of the memory-quota work.)_
 - Zero occurrences of native panics when scripts exceed execution bounds.
-- Unit and integration tests covering Fuel exhaustion and OOM recovery pass 100% green.
+- Unit and integration tests covering Fuel exhaustion, variable-cost interruption, checked output ceilings, and OOM recovery pass 100% green.

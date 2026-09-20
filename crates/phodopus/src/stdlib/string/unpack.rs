@@ -1,228 +1,317 @@
-use crate::{Context, Error, IntoValue, Value};
+use std::pin::Pin;
 
-use super::{Endianness, FormatState, calculate_padding, get_align_size_for_option, parse_number};
+use gc_arena::Collect;
 
-pub fn process<'gc>(
-    fmt: &str,
-    bytes: &[u8],
-    start_pos: usize,
+use crate::{
+    BoxSequence, CallbackReturn, Context, Error, Execution, IntoValue, Sequence, SequencePoll,
+    Stack, Value,
+};
+
+use super::{Endianness, FormatCursor, FormatState, calculate_padding, get_align_size_for_option};
+
+/// Fuel charged for advancing over one format-string byte.
+const FUEL_PER_FORMAT_BYTE: i32 = 1;
+
+/// A resumable implementation of `string.unpack`.
+#[derive(Collect)]
+#[collect(no_drop)]
+pub(crate) struct UnpackSequence<'gc> {
+    fmt: FormatCursor,
+    state: FormatState,
+    #[collect(require_static)]
+    bytes: Vec<u8>,
+    #[collect(require_static)]
+    source: Vec<u8>,
+    pos: usize,
+    values: Vec<Value<'gc>>,
+}
+
+impl<'gc> UnpackSequence<'gc> {
+    pub(crate) fn create(
+        ctx: Context<'gc>,
+        fmt: &str,
+        bytes: &[u8],
+        start_pos: usize,
+    ) -> CallbackReturn<'gc> {
+        CallbackReturn::Sequence(BoxSequence::new(
+            &ctx,
+            UnpackSequence {
+                fmt: FormatCursor::create(fmt),
+                state: FormatState::default(),
+                bytes: bytes.to_vec(),
+                source: Vec::new(),
+                pos: start_pos,
+                values: Vec::new(),
+            },
+        ))
+    }
+}
+
+impl<'gc> Sequence<'gc> for UnpackSequence<'gc> {
+    fn poll(
+        mut self: Pin<&mut Self>,
+        ctx: Context<'gc>,
+        mut exec: Execution<'gc, '_>,
+        mut stack: Stack<'gc, '_>,
+    ) -> Result<SequencePoll<'gc>, Error<'gc>> {
+        let seq = self.as_mut().get_mut();
+        run(seq, ctx, exec.fuel())?;
+
+        if !seq.fmt.is_done() {
+            return Ok(SequencePoll::Pending);
+        }
+
+        stack.clear();
+        for value in seq.values.drain(..) {
+            stack.push_back(value);
+        }
+        stack.push_back(Value::Integer(seq.pos as i64 + 1));
+        Ok(SequencePoll::Return)
+    }
+}
+
+fn run<'gc>(
+    seq: &mut UnpackSequence<'gc>,
     ctx: Context<'gc>,
-) -> Result<(Vec<Value<'gc>>, usize), Error<'gc>> {
-    let mut pos = start_pos;
-    let mut state = FormatState::default();
-    let mut values = Vec::new();
-    let mut chars = fmt.chars().peekable();
+    fuel: &mut crate::Fuel,
+) -> Result<(), Error<'gc>> {
+    while let Some(format_char) = seq.fmt.next_char() {
+        fuel.consume(FUEL_PER_FORMAT_BYTE);
+        process_option(seq, ctx, format_char)?;
 
-    while let Some(format_char) = chars.next() {
-        match format_char {
-            '<' => state.endianness = Endianness::Little,
-            '>' => state.endianness = Endianness::Big,
-            '=' => state.endianness = Endianness::Native,
-            '!' => {
-                let num_opt = parse_number(&mut chars)
-                    .map_err(|err| Error::from_value(err.into_value(ctx)))?;
-                let n = num_opt.unwrap_or(std::mem::size_of::<usize>());
-                if n < 1 || n > 16 || !n.is_power_of_two() {
-                    return Err(format!(
-                        "alignment option '!' requires a power of 2 between 1 and 16 (got {})",
-                        n
-                    )
+        if !fuel.should_continue() && !seq.fmt.is_done() {
+            return Ok(());
+        }
+    }
+    Ok(())
+}
+
+fn process_option<'gc>(
+    seq: &mut UnpackSequence<'gc>,
+    ctx: Context<'gc>,
+    format_char: char,
+) -> Result<(), Error<'gc>> {
+    let state = &mut seq.state;
+    let bytes = &seq.bytes;
+    let pos = &mut seq.pos;
+    let values = &mut seq.values;
+    let fmt = &mut seq.fmt;
+    // `source` is unused by the current model; keep the field for parity with
+    // the previous in-place implementation.
+    let _ = &seq.source;
+
+    match format_char {
+        '<' => state.endianness = Endianness::Little,
+        '>' => state.endianness = Endianness::Big,
+        '=' => state.endianness = Endianness::Native,
+        '!' => {
+            let n = fmt
+                .parse_number()
+                .map_err(|err| Error::from_value(err.into_value(ctx)))?
+                .unwrap_or(std::mem::size_of::<usize>());
+            if n < 1 || n > 16 || !n.is_power_of_two() {
+                return Err(format!(
+                    "alignment option '!' requires a power of 2 between 1 and 16 (got {})",
+                    n
+                )
+                .into_value(ctx)
+                .into());
+            }
+            state.max_alignment = n;
+        }
+        ' ' | '\t' | '\r' | '\n' => {}
+        'x' => {
+            skip_padding(bytes, pos, 1).map_err(|err| Error::from_value(err.into_value(ctx)))?;
+        }
+        'X' => {
+            let op = fmt.next_char().ok_or_else(|| {
+                Error::from_value("'X' must be followed by an option character".into_value(ctx))
+            })?;
+            let num_opt = if matches!(op, 'i' | 'I' | 's' | 'c') {
+                fmt.parse_number()
+                    .map_err(|err| Error::from_value(err.into_value(ctx)))?
+            } else {
+                None
+            };
+            let align_size = get_align_size_for_option(op, num_opt)
+                .map_err(|err| Error::from_value(err.into_value(ctx)))?;
+            let padding = calculate_padding(*pos, align_size, state.max_alignment);
+            skip_padding(bytes, pos, padding)
+                .map_err(|err| Error::from_value(err.into_value(ctx)))?;
+        }
+        'b' => {
+            let padding = calculate_padding(*pos, 1, state.max_alignment);
+            skip_padding(bytes, pos, padding)
+                .map_err(|err| Error::from_value(err.into_value(ctx)))?;
+            let val = read_int(bytes, pos, 1, state.endianness, 'b')
+                .map_err(|err| Error::from_value(err.into_value(ctx)))?;
+            values.push(Value::Integer(val));
+        }
+        'B' => {
+            let padding = calculate_padding(*pos, 1, state.max_alignment);
+            skip_padding(bytes, pos, padding)
+                .map_err(|err| Error::from_value(err.into_value(ctx)))?;
+            let val = read_uint(bytes, pos, 1, state.endianness, 'B')
+                .map_err(|err| Error::from_value(err.into_value(ctx)))?;
+            values.push(Value::Integer(val));
+        }
+        'h' => {
+            let padding = calculate_padding(*pos, 2, state.max_alignment);
+            skip_padding(bytes, pos, padding)
+                .map_err(|err| Error::from_value(err.into_value(ctx)))?;
+            let val = read_int(bytes, pos, 2, state.endianness, 'h')
+                .map_err(|err| Error::from_value(err.into_value(ctx)))?;
+            values.push(Value::Integer(val));
+        }
+        'H' => {
+            let padding = calculate_padding(*pos, 2, state.max_alignment);
+            skip_padding(bytes, pos, padding)
+                .map_err(|err| Error::from_value(err.into_value(ctx)))?;
+            let val = read_uint(bytes, pos, 2, state.endianness, 'H')
+                .map_err(|err| Error::from_value(err.into_value(ctx)))?;
+            values.push(Value::Integer(val));
+        }
+        'l' | 'j' => {
+            let padding = calculate_padding(*pos, 8, state.max_alignment);
+            skip_padding(bytes, pos, padding)
+                .map_err(|err| Error::from_value(err.into_value(ctx)))?;
+            let val = read_int(bytes, pos, 8, state.endianness, format_char)
+                .map_err(|err| Error::from_value(err.into_value(ctx)))?;
+            values.push(Value::Integer(val));
+        }
+        'L' | 'J' | 'T' => {
+            let padding = calculate_padding(*pos, 8, state.max_alignment);
+            skip_padding(bytes, pos, padding)
+                .map_err(|err| Error::from_value(err.into_value(ctx)))?;
+            let val = read_uint(bytes, pos, 8, state.endianness, format_char)
+                .map_err(|err| Error::from_value(err.into_value(ctx)))?;
+            values.push(Value::Integer(val));
+        }
+        'i' => {
+            let size = fmt
+                .parse_number()
+                .map_err(|err| Error::from_value(err.into_value(ctx)))?
+                .unwrap_or(4);
+            if size < 1 || size > 16 {
+                return Err(format!("integral size {} out of limits [1, 16]", size)
                     .into_value(ctx)
                     .into());
-                }
-                state.max_alignment = n;
             }
-            ' ' | '\t' | '\r' | '\n' => {}
-            'x' => {
-                skip_padding(bytes, &mut pos, 1)
-                    .map_err(|err| Error::from_value(err.into_value(ctx)))?;
+            let padding = calculate_padding(*pos, size, state.max_alignment);
+            skip_padding(bytes, pos, padding)
+                .map_err(|err| Error::from_value(err.into_value(ctx)))?;
+            let val = read_int(bytes, pos, size, state.endianness, 'i')
+                .map_err(|err| Error::from_value(err.into_value(ctx)))?;
+            values.push(Value::Integer(val));
+        }
+        'I' => {
+            let size = fmt
+                .parse_number()
+                .map_err(|err| Error::from_value(err.into_value(ctx)))?
+                .unwrap_or(4);
+            if size < 1 || size > 16 {
+                return Err(format!("integral size {} out of limits [1, 16]", size)
+                    .into_value(ctx)
+                    .into());
             }
-            'X' => {
-                let op = chars.next().ok_or_else(|| {
-                    Error::from_value("'X' must be followed by an option character".into_value(ctx))
-                })?;
-                let num_opt = if matches!(op, 'i' | 'I' | 's' | 'c') {
-                    parse_number(&mut chars)
-                        .map_err(|err| Error::from_value(err.into_value(ctx)))?
-                } else {
-                    None
-                };
-                let align_size = get_align_size_for_option(op, num_opt)
-                    .map_err(|err| Error::from_value(err.into_value(ctx)))?;
-                let padding = calculate_padding(pos, align_size, state.max_alignment);
-                skip_padding(bytes, &mut pos, padding)
-                    .map_err(|err| Error::from_value(err.into_value(ctx)))?;
-            }
-            'b' => {
-                let padding = calculate_padding(pos, 1, state.max_alignment);
-                skip_padding(bytes, &mut pos, padding)
-                    .map_err(|err| Error::from_value(err.into_value(ctx)))?;
-                let val = read_int(bytes, &mut pos, 1, state.endianness, 'b')
-                    .map_err(|err| Error::from_value(err.into_value(ctx)))?;
-                values.push(Value::Integer(val));
-            }
-            'B' => {
-                let padding = calculate_padding(pos, 1, state.max_alignment);
-                skip_padding(bytes, &mut pos, padding)
-                    .map_err(|err| Error::from_value(err.into_value(ctx)))?;
-                let val = read_uint(bytes, &mut pos, 1, state.endianness, 'B')
-                    .map_err(|err| Error::from_value(err.into_value(ctx)))?;
-                values.push(Value::Integer(val));
-            }
-            'h' => {
-                let padding = calculate_padding(pos, 2, state.max_alignment);
-                skip_padding(bytes, &mut pos, padding)
-                    .map_err(|err| Error::from_value(err.into_value(ctx)))?;
-                let val = read_int(bytes, &mut pos, 2, state.endianness, 'h')
-                    .map_err(|err| Error::from_value(err.into_value(ctx)))?;
-                values.push(Value::Integer(val));
-            }
-            'H' => {
-                let padding = calculate_padding(pos, 2, state.max_alignment);
-                skip_padding(bytes, &mut pos, padding)
-                    .map_err(|err| Error::from_value(err.into_value(ctx)))?;
-                let val = read_uint(bytes, &mut pos, 2, state.endianness, 'H')
-                    .map_err(|err| Error::from_value(err.into_value(ctx)))?;
-                values.push(Value::Integer(val));
-            }
-            'l' | 'j' => {
-                let padding = calculate_padding(pos, 8, state.max_alignment);
-                skip_padding(bytes, &mut pos, padding)
-                    .map_err(|err| Error::from_value(err.into_value(ctx)))?;
-                let val = read_int(bytes, &mut pos, 8, state.endianness, format_char)
-                    .map_err(|err| Error::from_value(err.into_value(ctx)))?;
-                values.push(Value::Integer(val));
-            }
-            'L' | 'J' | 'T' => {
-                let padding = calculate_padding(pos, 8, state.max_alignment);
-                skip_padding(bytes, &mut pos, padding)
-                    .map_err(|err| Error::from_value(err.into_value(ctx)))?;
-                let val = read_uint(bytes, &mut pos, 8, state.endianness, format_char)
-                    .map_err(|err| Error::from_value(err.into_value(ctx)))?;
-                values.push(Value::Integer(val));
-            }
-            'i' => {
-                let num_opt = parse_number(&mut chars)
-                    .map_err(|err| Error::from_value(err.into_value(ctx)))?;
-                let size = num_opt.unwrap_or(4);
-                if size < 1 || size > 16 {
-                    return Err(Error::from_value(
-                        format!("integral size {} out of limits [1, 16]", size).into_value(ctx),
-                    ));
-                }
-                let padding = calculate_padding(pos, size, state.max_alignment);
-                skip_padding(bytes, &mut pos, padding)
-                    .map_err(|err| Error::from_value(err.into_value(ctx)))?;
-                let val = read_int(bytes, &mut pos, size, state.endianness, 'i')
-                    .map_err(|err| Error::from_value(err.into_value(ctx)))?;
-                values.push(Value::Integer(val));
-            }
-            'I' => {
-                let num_opt = parse_number(&mut chars)
-                    .map_err(|err| Error::from_value(err.into_value(ctx)))?;
-                let size = num_opt.unwrap_or(4);
-                if size < 1 || size > 16 {
-                    return Err(Error::from_value(
-                        format!("integral size {} out of limits [1, 16]", size).into_value(ctx),
-                    ));
-                }
-                let padding = calculate_padding(pos, size, state.max_alignment);
-                skip_padding(bytes, &mut pos, padding)
-                    .map_err(|err| Error::from_value(err.into_value(ctx)))?;
-                let val = read_uint(bytes, &mut pos, size, state.endianness, 'I')
-                    .map_err(|err| Error::from_value(err.into_value(ctx)))?;
-                values.push(Value::Integer(val));
-            }
-            'f' => {
-                let padding = calculate_padding(pos, 4, state.max_alignment);
-                skip_padding(bytes, &mut pos, padding)
-                    .map_err(|err| Error::from_value(err.into_value(ctx)))?;
-                let val = read_float(bytes, &mut pos, state.endianness)
-                    .map_err(|err| Error::from_value(err.into_value(ctx)))?;
-                values.push(Value::Number(val as f64));
-            }
-            'd' | 'n' => {
-                let padding = calculate_padding(pos, 8, state.max_alignment);
-                skip_padding(bytes, &mut pos, padding)
-                    .map_err(|err| Error::from_value(err.into_value(ctx)))?;
-                let val = read_double(bytes, &mut pos, state.endianness, format_char)
-                    .map_err(|err| Error::from_value(err.into_value(ctx)))?;
-                values.push(Value::Number(val));
-            }
-            'c' => {
-                let num_opt = parse_number(&mut chars)
-                    .map_err(|err| Error::from_value(err.into_value(ctx)))?;
-                let n = num_opt.ok_or_else(|| {
+            let padding = calculate_padding(*pos, size, state.max_alignment);
+            skip_padding(bytes, pos, padding)
+                .map_err(|err| Error::from_value(err.into_value(ctx)))?;
+            let val = read_uint(bytes, pos, size, state.endianness, 'I')
+                .map_err(|err| Error::from_value(err.into_value(ctx)))?;
+            values.push(Value::Integer(val));
+        }
+        'f' => {
+            let padding = calculate_padding(*pos, 4, state.max_alignment);
+            skip_padding(bytes, pos, padding)
+                .map_err(|err| Error::from_value(err.into_value(ctx)))?;
+            let val = read_float(bytes, pos, state.endianness)
+                .map_err(|err| Error::from_value(err.into_value(ctx)))?;
+            values.push(Value::Number(val as f64));
+        }
+        'd' | 'n' => {
+            let padding = calculate_padding(*pos, 8, state.max_alignment);
+            skip_padding(bytes, pos, padding)
+                .map_err(|err| Error::from_value(err.into_value(ctx)))?;
+            let val = read_double(bytes, pos, state.endianness, format_char)
+                .map_err(|err| Error::from_value(err.into_value(ctx)))?;
+            values.push(Value::Number(val));
+        }
+        'c' => {
+            let n = fmt
+                .parse_number()
+                .map_err(|err| Error::from_value(err.into_value(ctx)))?
+                .ok_or_else(|| {
                     Error::from_value("missing size for format option 'c'".into_value(ctx))
                 })?;
-                let slice = read_exact(bytes, &mut pos, n, 'c')
-                    .map_err(|err| Error::from_value(err.into_value(ctx)))?;
-                values.push(ctx.intern(slice).into_value(ctx));
-            }
-            'z' => {
-                let remaining = &bytes[pos..];
-                match remaining.iter().position(|&b| b == 0) {
-                    Some(null_pos) => {
-                        let str_bytes = &remaining[..null_pos];
-                        values.push(ctx.intern(str_bytes).into_value(ctx));
-                        pos += null_pos + 1;
-                    }
-                    None => {
-                        return Err(Error::from_value(
-                            "missing null terminator for 'z' format".into_value(ctx),
-                        ));
-                    }
+            let slice = read_exact(bytes, pos, n, 'c')
+                .map_err(|err| Error::from_value(err.into_value(ctx)))?;
+            values.push(ctx.intern(slice).into_value(ctx));
+        }
+        'z' => {
+            let remaining = &bytes[*pos..];
+            match remaining.iter().position(|&b| b == 0) {
+                Some(null_pos) => {
+                    let str_bytes = &remaining[..null_pos];
+                    values.push(ctx.intern(str_bytes).into_value(ctx));
+                    *pos += null_pos + 1;
                 }
-            }
-            's' => {
-                let num_opt = parse_number(&mut chars)
-                    .map_err(|err| Error::from_value(err.into_value(ctx)))?;
-                let len_size = num_opt.unwrap_or(std::mem::size_of::<usize>());
-                if len_size < 1 || len_size > 16 {
+                None => {
                     return Err(Error::from_value(
-                        format!("integral size {} out of limits [1, 16]", len_size).into_value(ctx),
+                        "missing null terminator for 'z' format".into_value(ctx),
                     ));
                 }
-                let padding = calculate_padding(pos, len_size, state.max_alignment);
-                skip_padding(bytes, &mut pos, padding)
-                    .map_err(|err| Error::from_value(err.into_value(ctx)))?;
-                let len_slice = read_exact(bytes, &mut pos, len_size, 's')
-                    .map_err(|err| Error::from_value(err.into_value(ctx)))?;
-                let mut le_bytes = [0u8; 16];
-                match state.endianness {
-                    Endianness::Little => le_bytes[..len_size].copy_from_slice(len_slice),
-                    Endianness::Big => {
+            }
+        }
+        's' => {
+            let len_size = fmt
+                .parse_number()
+                .map_err(|err| Error::from_value(err.into_value(ctx)))?
+                .unwrap_or(std::mem::size_of::<usize>());
+            if len_size < 1 || len_size > 16 {
+                return Err(format!("integral size {} out of limits [1, 16]", len_size)
+                    .into_value(ctx)
+                    .into());
+            }
+            let padding = calculate_padding(*pos, len_size, state.max_alignment);
+            skip_padding(bytes, pos, padding)
+                .map_err(|err| Error::from_value(err.into_value(ctx)))?;
+            let len_slice = read_exact(bytes, pos, len_size, 's')
+                .map_err(|err| Error::from_value(err.into_value(ctx)))?;
+            let mut le_bytes = [0u8; 16];
+            match state.endianness {
+                Endianness::Little => le_bytes[..len_size].copy_from_slice(len_slice),
+                Endianness::Big => {
+                    for (i, &b) in len_slice.iter().rev().enumerate() {
+                        le_bytes[i] = b;
+                    }
+                }
+                Endianness::Native => {
+                    if cfg!(target_endian = "little") {
+                        le_bytes[..len_size].copy_from_slice(len_slice);
+                    } else {
                         for (i, &b) in len_slice.iter().rev().enumerate() {
                             le_bytes[i] = b;
                         }
                     }
-                    Endianness::Native => {
-                        if cfg!(target_endian = "little") {
-                            le_bytes[..len_size].copy_from_slice(len_slice);
-                        } else {
-                            for (i, &b) in len_slice.iter().rev().enumerate() {
-                                le_bytes[i] = b;
-                            }
-                        }
-                    }
                 }
-                let str_len_u128 = u128::from_le_bytes(le_bytes);
-                let str_len = usize::try_from(str_len_u128)
-                    .map_err(|_| Error::from_value("string length too large".into_value(ctx)))?;
-                let str_slice = read_exact(bytes, &mut pos, str_len, 's')
-                    .map_err(|err| Error::from_value(err.into_value(ctx)))?;
-                values.push(ctx.intern(str_slice).into_value(ctx));
             }
-            invalid => {
-                return Err(Error::from_value(
-                    format!("invalid conversion option '{}' in format string", invalid)
-                        .into_value(ctx),
-                ));
-            }
+            let str_len_u128 = u128::from_le_bytes(le_bytes);
+            let str_len = usize::try_from(str_len_u128)
+                .map_err(|_| Error::from_value("string length too large".into_value(ctx)))?;
+            let str_slice = read_exact(bytes, pos, str_len, 's')
+                .map_err(|err| Error::from_value(err.into_value(ctx)))?;
+            values.push(ctx.intern(str_slice).into_value(ctx));
+        }
+        invalid => {
+            return Err(
+                format!("invalid conversion option '{}' in format string", invalid)
+                    .into_value(ctx)
+                    .into(),
+            );
         }
     }
-
-    Ok((values, pos + 1))
+    Ok(())
 }
 
 fn read_exact<'a>(
