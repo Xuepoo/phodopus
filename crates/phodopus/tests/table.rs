@@ -1,5 +1,6 @@
 use std::cmp::Ordering;
 
+use phodopus::table::InvalidTableKey;
 use phodopus::{Lua, Table, Value};
 
 #[test]
@@ -43,5 +44,59 @@ fn test_table_iter() {
         assert!(table.get_value(ctx, "1").is_nil());
         assert!(table.get_value(ctx, "2").is_nil());
         assert!(table.get_value(ctx, "3").is_nil());
+    });
+}
+
+/// Nil and NaN keys are rejected before any map slot is touched; this exercises the canonical-key
+/// guard that keeps the raw table's live/dead key invariant intact.
+#[test]
+fn invalid_keys_are_rejected() {
+    let mut lua = Lua::core();
+
+    lua.enter(|ctx| {
+        let table = Table::new(&ctx);
+
+        assert!(matches!(
+            table.set(ctx, Value::Nil, 1),
+            Err(InvalidTableKey::IsNil)
+        ));
+        assert!(matches!(
+            table.set(ctx, f64::NAN, 1),
+            Err(InvalidTableKey::IsNaN)
+        ));
+        assert!(matches!(
+            table.set(ctx, Value::Nil, Value::Nil),
+            Err(InvalidTableKey::IsNil)
+        ));
+
+        assert!(matches!(table.get_value(ctx, Value::Nil), Value::Nil));
+        assert!(matches!(table.get_value(ctx, f64::NAN), Value::Nil));
+    });
+}
+
+/// A key removed (set to Nil) during iteration must not corrupt iteration order or be yielded
+/// again; this covers the dead-key resurrection and erase paths in `RawTable::set`/`RawTable::next`.
+#[test]
+fn remove_during_iteration_then_refill() {
+    let mut lua = Lua::core();
+
+    lua.enter(|ctx| {
+        let table = Table::new(&ctx);
+        for i in 1..=8 {
+            table.set(ctx, i, i).unwrap();
+        }
+        table.set(ctx, "key", "value").unwrap();
+
+        for (key, _) in table.iter() {
+            table.set(ctx, key, Value::Nil).unwrap();
+        }
+        assert_eq!(table.iter().count(), 0);
+
+        table.set(ctx, "key", "refilled").unwrap();
+        assert!(
+            matches!(table.get_value(ctx, "key"), Value::String(s) if s == "refilled"),
+            "expected the re-inserted string value"
+        );
+        assert_eq!(table.iter().count(), 1);
     });
 }

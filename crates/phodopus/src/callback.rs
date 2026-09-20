@@ -86,6 +86,11 @@ pub struct Callback<'gc>(Gc<'gc, CallbackInner<'gc>>);
 
 // We represent a callback as a single pointer with an inline VTable header.
 pub struct CallbackInner<'gc> {
+    // SAFETY: This function pointer is only ever invoked through `Callback::call`, which passes the
+    // exact `Gc::as_ptr(self.0)` it was created with (`CallbackInner` is the `#[repr(C)]` first
+    // field of the concrete `HeaderCallback`). The trampoline stored in `Callback::new` then casts
+    // the pointer back to the concrete `HeaderCallback<C>` before dereferencing, so the pointee
+    // type and the `'gc`/`'a` lifetimes always match the allocation that supplied the VTable.
     call: unsafe fn(
         *const CallbackInner<'gc>,
         Context<'gc>,
@@ -121,6 +126,10 @@ impl<'gc> Callback<'gc> {
             mc,
             HeaderCallback {
                 header: CallbackInner {
+                    // SAFETY: `ptr` is always the `CallbackInner` pointer produced by
+                    // `Callback::call` from the same allocation, and `HeaderCallback<C>` is
+                    // `#[repr(C)]` with `header` as its first field, so the cast recovers the exact
+                    // concrete type stored in this `Gc`.
                     call: |ptr, ctx, exec, stack| unsafe {
                         let hc = ptr as *const HeaderCallback<C>;
                         ((*hc).callback).call(ctx, exec, stack)
@@ -130,6 +139,9 @@ impl<'gc> Callback<'gc> {
             },
         );
 
+        // SAFETY: `HeaderCallback<C>` is `#[repr(C)]` with `CallbackInner` (which contains only the
+        // function pointer, no data) as its first field, so casting the `Gc` pointer to
+        // `CallbackInner` is a valid header cast and loses no data.
         Self(unsafe { Gc::cast::<CallbackInner>(hc) })
     }
 
@@ -207,6 +219,10 @@ impl<'gc> Callback<'gc> {
         exec: Execution<'gc, '_>,
         stack: Stack<'gc, '_>,
     ) -> Result<CallbackReturn<'gc>, Error<'gc>> {
+        // SAFETY: `self.0` is the same `Gc` whose pointer was captured when this VTable was built,
+        // and the VTable's trampoline casts the pointer back to its originating concrete type. Both
+        // the `'gc` and `'a` lifetimes are reconstructed exactly as they were erased at
+        // construction, so no lifetime is extended.
         unsafe { (self.0.call)(Gc::as_ptr(self.0), ctx, exec, stack) }
     }
 }
@@ -319,6 +335,9 @@ pub trait Sequence<'gc>: Collect {
 /// generally owned only by the `Thread` in which it is running.
 pub struct BoxSequence<'gc>(Pin<boxed::Box<dyn Sequence<'gc> + 'gc, MetricsAlloc<'static>>>);
 
+// SAFETY: `BoxSequence` owns its `Sequence`; the manual impl forwards tracing to the boxed value.
+// `gc-arena` has no `Collect` impl for `Pin<T>`, and the `Pin` here is structural (the boxed value
+// is never moved out), so tracing through `Pin::get_ref` does not violate pinning.
 unsafe impl<'gc> Collect for BoxSequence<'gc> {
     fn trace(&self, cc: &gc_arena::Collection) {
         // SAFETY: We have to manually implement `Collect` for `BoxSequence<'gc>` because `gc-arena`
@@ -338,8 +357,11 @@ impl<'gc> fmt::Debug for BoxSequence<'gc> {
 impl<'gc> BoxSequence<'gc> {
     pub fn new(mc: &Mutation<'gc>, sequence: impl Sequence<'gc> + 'gc) -> Self {
         let b = boxed::Box::new_in(sequence, MetricsAlloc::from_metrics(mc.metrics().clone()));
-        // TODO: Required unsafety due to do lack of `CoerceUnsized` on allocator_api2 `Box` type,
-        // replace with safe cast when one of allocator_api or CoerceUnsized is stabilized.
+        // SAFETY: The pointer and allocator returned together by `into_raw_with_allocator` are
+        // immediately reunited here with the identical `MetricsAlloc`, so the allocation is not
+        // leaked or double-freed. Recasting `*mut T` to `*mut dyn Sequence` is the standard
+        // unsizing cast for a boxed value that is known to implement `Sequence`; the original
+        // concrete type is preserved in the fat pointer's metadata.
         let (ptr, alloc) = boxed::Box::into_raw_with_allocator(b);
         let b = unsafe { boxed::Box::from_raw_in(ptr as *mut dyn Sequence, alloc) };
         Self(boxed::Box::into_pin(b))
