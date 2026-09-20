@@ -5,8 +5,8 @@ use gc_arena::{Collect, Gc, Mutation, allocator_api::MetricsAlloc, lock::RefLock
 use thiserror::Error;
 
 use crate::{
-    CallbackReturn, Context, Error, FromMultiValue, Fuel, Function, IntoMultiValue, SequencePoll,
-    Stack, String, Thread, ThreadMode, Variadic,
+    CallbackReturn, Context, Error, FromMultiValue, Fuel, Function, IntoMultiValue, RuntimeError,
+    SequencePoll, Stack, String, Thread, ThreadMode, Variadic,
     compiler::{FunctionRef, LineNumber},
     thread::BadThreadMode,
 };
@@ -509,6 +509,16 @@ impl<'gc> Executor<'gc> {
                                     sequence,
                                     pending_error: Some(err),
                                 });
+                                // A quota refusal unwinds a deep call chain down to the `pcall`
+                                // handler. The frames and stack have been truncated, but their
+                                // geometric capacity is retained and, being external allocations
+                                // held by a *live* thread, is invisible to the collector. Release
+                                // it here so a caught `OutOfMemory` actually recovers memory and the
+                                // instance remains usable under the same quota. Gated on an actual
+                                // excess so ordinary caught errors do not churn allocations.
+                                if ctx.check_current_memory().is_err() {
+                                    top_state.shrink_spare_capacity();
+                                }
                             }
                             frame => panic!("tried to wind through improper frame {frame:?}"),
                         }
@@ -518,6 +528,53 @@ impl<'gc> Executor<'gc> {
             }
 
             fuel.consume(Self::FUEL_PER_STEP);
+
+            // Hard-quota chokepoint (structural, not per-allocation). `gc-arena 0.5.3` does not
+            // route internal `Gc::new` through an application allocator, so per-site pre-checks
+            // cannot cover every retention path (thread frames, upvalue boxes, interned strings).
+            // This loop checks the arena's continuously updated tracked allocation after every
+            // executor iteration, which bounds any unchecked retained-growth path by one iteration
+            // (`VM_GRANULARITY` VM instructions) rather than by execution length.
+            //
+            // Collection is forbidden inside arena mutation, so this can only refuse, never reclaim.
+            // The first observation of an excess yields to the host boundary (which may collect); if
+            // the excess is observed again it is retained, so a typed `OutOfMemory` is injected as a
+            // normal error frame. Injecting here keeps the Lua call stack intact, so `pcall` can
+            // catch it (unlike the host-boundary refusal, which discards the stack).
+            //
+            // The check only applies while no error is already unwinding. The unwind machinery pops
+            // the frame *below* a `Frame::Error` and asserts it is a `Lua` or `Sequence` frame, so
+            // injecting onto an error/`Sequence`-pending stack would trip those asserts; and
+            // yielding to the host boundary mid-unwind would let `enforce_memory_limit` replace the
+            // in-flight catchable error with the uncatchable host refusal. An error in flight is
+            // itself the mechanism that frees the retained memory, so it is allowed to proceed.
+            let limit = ctx.memory_limit();
+            if limit.max_bytes().is_some() {
+                let can_inject = matches!(
+                    top_state.frames.last(),
+                    Some(Frame::Lua { .. })
+                        | Some(Frame::Sequence {
+                            pending_error: None,
+                            ..
+                        })
+                );
+                if can_inject {
+                    match ctx.check_current_memory() {
+                        Err(oom) => {
+                            if limit.is_quota_yielded() {
+                                limit.clear_quota_yielded();
+                                top_state
+                                    .frames
+                                    .push(Frame::Error(Error::Runtime(RuntimeError::new(oom))));
+                            } else {
+                                limit.set_quota_yielded();
+                                break false;
+                            }
+                        }
+                        Ok(()) => limit.clear_quota_yielded(),
+                    }
+                }
+            }
 
             if !fuel.should_continue() {
                 break false;
@@ -666,8 +723,10 @@ impl<'gc, 'a> Execution<'gc, 'a> {
         };
 
         let proto = closure.prototype();
-        // The previously executed instruction for a callback should be the Call opcode.
-        let call_opcode = *pc - 1;
+        // The previously executed instruction for a callback should be the Call opcode. A frame
+        // that has not run its first instruction yet has `pc == 0`; `saturating_sub` avoids an
+        // underflow when a quota refusal interrupts such a frame.
+        let call_opcode = pc.saturating_sub(1);
 
         Some(UpperLuaFrame {
             chunk_name: proto.chunk_name,
@@ -677,7 +736,8 @@ impl<'gc, 'a> Execution<'gc, 'a> {
                 .binary_search_by_key(&call_opcode, |(opi, _)| *opi)
             {
                 Ok(i) => proto.opcode_line_numbers[i].1,
-                Err(i) => proto.opcode_line_numbers[i - 1].1,
+                Err(i) if i > 0 => proto.opcode_line_numbers[i - 1].1,
+                Err(_) => LineNumber(0),
             },
         })
     }

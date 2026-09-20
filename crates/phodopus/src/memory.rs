@@ -6,32 +6,41 @@
 //! is reported by `Metrics::total_allocation()`, which is the authoritative "current" value the
 //! quota is checked against.
 //!
-//! Enforcement is performed at allocation boundaries in the runtime. Before one of these growth
-//! paths allocates, it calls [`Context::check_memory`](crate::Context::check_memory), which refuses
-//! with a typed [`OutOfMemory`] when the requested bytes would push the arena above the configured
-//! ceiling:
+//! Enforcement is layered:
 //!
-//! * every Lua table constructor (`{...}`), charged for its initial array and map capacity *before*
-//!   either part is allocated (`Table::try_new`);
-//! * every table array/map growth, charged for the amortized growth request before the fallible
-//!   reserve (`RawTable::try_reserve_array` / `try_reserve_map`);
-//! * `..` / `table.concat` result buffers, charged for the projected size before `Vec::with_capacity`
-//!   (`meta_ops::concat_many` / `concat_separated`);
-//! * every closure created by the `Closure` opcode, charged for its `Gc`-boxed `ClosureInner` and
-//!   upvalue vector before the box is allocated (`Closure::try_from_parts`), so a retained closure
-//!   chain is refused at the ceiling rather than at the execution boundary;
-//! * large standard-library string buffers such as `string.rep`, `string.format`, and `string.gsub`,
-//!   charged for the projected output before it is appended (`stdlib::string`).
+//! 1. **Per-allocation pre-checks.** Before one of these growth paths allocates, it calls
+//!    [`Context::check_memory`](crate::Context::check_memory), which refuses with a typed
+//!    [`OutOfMemory`] when the requested bytes would push the arena above the configured ceiling:
 //!
-//! The check runs *before* the growth is attempted, so the documented quota paths cannot trigger a
-//! native abort, `handle_alloc_error`, or a partially-initialized value. It is not a literal
-//! interception of every internal `Gc::new`: `gc-arena 0.5.3` does not route `Gc`-box allocation
-//! through an application allocator, so allocations made *inside* a checked operation (for example
-//! the upvalue `Gc` boxes read by the `Closure` opcode, or the arena's own interned-string and
-//! bookkeeping nodes) are not each gated individually. They remain bounded because the operation
-//! that requests them is charged first and the next checked allocation or the GC-boundary check
-//! rejects once the tracked total reaches the ceiling. See the scope note in
-//! `docs/specifications/sandbox-and-fuel.md` §4.2.
+//!    * every Lua table constructor (`{...}`), charged for its initial array and map capacity
+//!      *before* either part is allocated (`Table::try_new`);
+//!    * every table array/map growth, charged for the amortized growth request before the fallible
+//!      reserve (`RawTable::try_reserve_array` / `try_reserve_map`);
+//!    * `..` / `table.concat` result buffers, charged for the projected size before
+//!      `Vec::with_capacity` (`meta_ops::concat_many` / `concat_separated`);
+//!    * every closure created by the `Closure` opcode, charged for its `Gc`-boxed `ClosureInner`
+//!      and upvalue vector before the box is allocated (`Closure::try_from_parts`), so a retained
+//!      closure chain is refused at the ceiling rather than at the execution boundary;
+//!    * large standard-library string buffers such as `string.rep`, `string.format`, and
+//!      `string.gsub`, charged for the projected output before it is appended (`stdlib::string`).
+//!
+//!    These checks run *before* the growth is attempted, so the documented quota paths cannot
+//!    trigger a native abort, `handle_alloc_error`, or a partially-initialized value.
+//!
+//! 2. **Executor chokepoint.** `gc-arena 0.5.3` does not route `Gc`-box allocation through an
+//!    application allocator, so path 1 cannot be a literal interception of every internal
+//!    `Gc::new` (for example the `Thread` nodes created inside a recursive call chain, the upvalue
+//!    boxes read by the `Closure` opcode, or interned-string nodes). The executor step loop
+//!    therefore checks the arena's tracked allocation against the ceiling after every iteration
+//!    and refuses through the ordinary Lua error machinery once the excess is confirmed retained.
+//!    This closes the whole class of unchecked retained-growth paths, not one site at a time. The
+//!    executor cannot collect inside arena mutation, so it never attempts reclamation; it only
+//!    refuses. The documented overshoot is bounded by a single executor iteration
+//!    (`VM_GRANULARITY = 64` VM instructions).
+//!
+//! Collection between executor steps (at the host boundary) reclaims garbage, so transient
+//! allocation that a collection can recover never triggers the refusal. See the scope and bound
+//! note in `docs/specifications/sandbox-and-fuel.md` §4.2.
 //!
 //! The ceiling is optional: [`MemoryLimit::new(None)`](MemoryLimit::new) means "unbounded", which
 //! preserves the historical measuring-only behavior.
@@ -76,6 +85,7 @@ pub struct MemoryLimit {
     max_bytes: Cell<Option<usize>>,
     current_bytes: Cell<usize>,
     exceeded: Cell<bool>,
+    quota_yielded: Cell<bool>,
 }
 
 impl MemoryLimit {
@@ -85,6 +95,7 @@ impl MemoryLimit {
             max_bytes: Cell::new(max_bytes),
             current_bytes: Cell::new(0),
             exceeded: Cell::new(false),
+            quota_yielded: Cell::new(false),
         }
     }
 
@@ -117,6 +128,25 @@ impl MemoryLimit {
     /// Clear the sticky "a request was refused" flag.
     pub fn clear_exceeded(&self) {
         self.exceeded.set(false);
+    }
+
+    /// Whether the executor has already yielded once for the current over-quota episode.
+    ///
+    /// The executor cannot collect inside arena mutation, so on the first observation of an excess
+    /// it yields to the host boundary (which may collect reclaimable garbage). If the excess is
+    /// observed again, it is retained and a typed `OutOfMemory` is injected.
+    pub fn is_quota_yielded(&self) -> bool {
+        self.quota_yielded.get()
+    }
+
+    /// Arm the over-quota yield flag.
+    pub fn set_quota_yielded(&self) {
+        self.quota_yielded.set(true);
+    }
+
+    /// Clear the over-quota yield flag.
+    pub fn clear_quota_yielded(&self) {
+        self.quota_yielded.set(false);
     }
 
     /// Record the arena's current tracked allocation without refusing.
@@ -154,6 +184,31 @@ impl MemoryLimit {
             self.exceeded.set(true);
             return Err(OutOfMemory {
                 requested,
+                limit: max,
+                current,
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Refuse when the already-tracked total is above the ceiling.
+    ///
+    /// This is the executor chokepoint variant: it takes no allocation request, only the arena's
+    /// continuously updated [`Metrics::total_allocation`](gc_arena::metrics::Metrics). It never
+    /// allocates, so it is safe to call from inside arena mutation where collection is forbidden.
+    /// The [`OutOfMemory`] payload reports `requested == current`, because no additional bytes were
+    /// requested; the excess is what the executor iteration already allocated.
+    pub fn check_current(&self, current: usize) -> Result<(), OutOfMemory> {
+        self.current_bytes.set(current);
+        let Some(max) = self.max_bytes.get() else {
+            return Ok(());
+        };
+
+        if current > max {
+            self.exceeded.set(true);
+            return Err(OutOfMemory {
+                requested: current,
                 limit: max,
                 current,
             });
@@ -202,5 +257,27 @@ mod tests {
         let err = limit.check(usize::MAX, 1).unwrap_err();
         assert_eq!(err.requested, usize::MAX);
         assert!(limit.is_exceeded());
+    }
+
+    #[test]
+    fn check_current_refuses_only_above_the_ceiling() {
+        let limit = MemoryLimit::new(Some(100));
+        assert!(limit.check_current(100).is_ok());
+        assert_eq!(limit.current_bytes(), 100);
+
+        let err = limit.check_current(101).unwrap_err();
+        assert_eq!(
+            err,
+            OutOfMemory {
+                requested: 101,
+                limit: 100,
+                current: 101,
+            }
+        );
+        assert!(limit.is_exceeded());
+
+        // Unbounded limits never refuse the chokepoint.
+        let unbounded = MemoryLimit::new(None);
+        assert!(unbounded.check_current(usize::MAX).is_ok());
     }
 }
