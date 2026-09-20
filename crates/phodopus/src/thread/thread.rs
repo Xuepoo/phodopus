@@ -570,7 +570,11 @@ pub(crate) fn backtrace<'gc>(
             match frame {
                 Frame::Lua { closure, pc, .. } => {
                     let proto = closure.prototype();
-                    let call_opcode = *pc - 1;
+                    // A frame that has not executed its first instruction yet (`pc == 0`, for
+                    // example a freshly pushed call that a quota refusal interrupts before it
+                    // runs) has no previous opcode; `saturating_sub` keeps the backtrace total
+                    // instead of underflowing.
+                    let call_opcode = pc.saturating_sub(1);
                     let current_line = match proto
                         .opcode_line_numbers
                         .binary_search_by_key(&call_opcode, |(opi, _)| *opi)

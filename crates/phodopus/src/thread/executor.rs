@@ -723,8 +723,10 @@ impl<'gc, 'a> Execution<'gc, 'a> {
         };
 
         let proto = closure.prototype();
-        // The previously executed instruction for a callback should be the Call opcode.
-        let call_opcode = *pc - 1;
+        // The previously executed instruction for a callback should be the Call opcode. A frame
+        // that has not run its first instruction yet has `pc == 0`; `saturating_sub` avoids an
+        // underflow when a quota refusal interrupts such a frame.
+        let call_opcode = pc.saturating_sub(1);
 
         Some(UpperLuaFrame {
             chunk_name: proto.chunk_name,
@@ -734,7 +736,8 @@ impl<'gc, 'a> Execution<'gc, 'a> {
                 .binary_search_by_key(&call_opcode, |(opi, _)| *opi)
             {
                 Ok(i) => proto.opcode_line_numbers[i].1,
-                Err(i) => proto.opcode_line_numbers[i - 1].1,
+                Err(i) if i > 0 => proto.opcode_line_numbers[i - 1].1,
+                Err(_) => LineNumber(0),
             },
         })
     }
