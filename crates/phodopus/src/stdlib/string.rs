@@ -3,6 +3,8 @@ use crate::{
     Value,
 };
 
+use super::sandbox;
+
 mod format;
 mod pack;
 mod packsize;
@@ -14,6 +16,62 @@ pub const MAX_STRING_REP_BYTES: usize = 16 * 1024 * 1024;
 
 /// Maximum buffer allocation size for `string.pack` (16 MiB sandbox ceiling).
 pub const MAX_STRING_PACK_BYTES: usize = 16 * 1024 * 1024;
+
+/// A resumable byte cursor over a `string.pack` / `string.unpack` format string.
+///
+/// The format string is copied into an owned buffer so the cursor can live in a
+/// heap-allocated `Sequence` without holding a GC reference. Advancing is
+/// charged to `Execution::fuel` by the owning sequence, which returns
+/// `SequencePoll::Pending` when the current Fuel slice is exhausted and resumes
+/// at the same byte offset.
+#[derive(Debug, Clone, gc_arena::Collect)]
+#[collect(require_static)]
+pub(crate) struct FormatCursor {
+    bytes: Vec<u8>,
+    pos: usize,
+}
+
+impl FormatCursor {
+    pub(crate) fn create(fmt: &str) -> Self {
+        Self {
+            bytes: fmt.as_bytes().to_vec(),
+            pos: 0,
+        }
+    }
+
+    pub(crate) fn next_char(&mut self) -> Option<char> {
+        let rest = std::str::from_utf8(&self.bytes[self.pos..]).ok()?;
+        let ch = rest.chars().next()?;
+        self.pos += ch.len_utf8();
+        Some(ch)
+    }
+
+    pub(crate) fn is_done(&self) -> bool {
+        self.pos >= self.bytes.len()
+    }
+
+    /// Parses an ASCII decimal number at the cursor, consuming its digits.
+    pub(crate) fn parse_number(&mut self) -> Result<Option<usize>, std::string::String> {
+        let start = self.pos;
+        let mut val: usize = 0;
+        while let Some(&byte) = self.bytes.get(self.pos) {
+            if !byte.is_ascii_digit() {
+                break;
+            }
+            let digit = usize::from(byte - b'0');
+            val = val
+                .checked_mul(10)
+                .and_then(|v| v.checked_add(digit))
+                .ok_or_else(|| "invalid number in format string".to_string())?;
+            self.pos += 1;
+        }
+        if self.pos == start {
+            Ok(None)
+        } else {
+            Ok(Some(val))
+        }
+    }
+}
 
 pub fn load_string<'gc>(ctx: Context<'gc>) {
     let string = Table::new(&ctx);
@@ -32,10 +90,11 @@ pub fn load_string<'gc>(ctx: Context<'gc>) {
     string.set_field(
         ctx,
         "byte",
-        Callback::from_fn(&ctx, |ctx, _, mut stack| {
+        Callback::from_fn(&ctx, |ctx, mut exec, mut stack| {
             let (string, i, j) = stack.consume::<(String, Option<i64>, Option<i64>)>(ctx)?;
             let i = i.unwrap_or(1);
             let substr = sub(string.as_bytes(), i, j.or(Some(i)))?;
+            exec.fuel().consume(sandbox::output_cost(substr.len()));
             stack.extend(substr.iter().map(|b| Value::Integer(i64::from(*b))));
             Ok(CallbackReturn::Return)
         }),
@@ -44,13 +103,16 @@ pub fn load_string<'gc>(ctx: Context<'gc>) {
     string.set_field(
         ctx,
         "char",
-        Callback::from_fn(&ctx, |ctx, _, mut stack| {
-            let string = ctx.intern(
-                &stack
-                    .into_iter()
-                    .map(|c| u8::from_value(ctx, c))
-                    .collect::<Result<Vec<_>, _>>()?,
-            );
+        Callback::from_fn(&ctx, |ctx, mut exec, mut stack| {
+            let bytes = stack
+                .into_iter()
+                .map(|c| u8::from_value(ctx, c))
+                .collect::<Result<Vec<_>, _>>()?;
+            if sandbox::checked_output_growth(0, bytes.len()).is_none() {
+                return Err("resulting string too large".into_value(ctx).into());
+            }
+            exec.fuel().consume(sandbox::output_cost(bytes.len()));
+            let string = ctx.intern(&bytes);
             stack.replace(ctx, string);
             Ok(CallbackReturn::Return)
         }),
@@ -59,9 +121,11 @@ pub fn load_string<'gc>(ctx: Context<'gc>) {
     string.set_field(
         ctx,
         "sub",
-        Callback::from_fn(&ctx, |ctx, _, mut stack| {
+        Callback::from_fn(&ctx, |ctx, mut exec, mut stack| {
             let (string, i, j) = stack.consume::<(String, i64, Option<i64>)>(ctx)?;
-            let substr = ctx.intern(sub(string.as_bytes(), i, j)?);
+            let raw = sub(string.as_bytes(), i, j)?;
+            exec.fuel().consume(sandbox::output_cost(raw.len()));
+            let substr = ctx.intern(raw);
             stack.replace(ctx, substr);
             Ok(CallbackReturn::Return)
         }),
@@ -70,8 +134,10 @@ pub fn load_string<'gc>(ctx: Context<'gc>) {
     string.set_field(
         ctx,
         "lower",
-        Callback::from_fn(&ctx, |ctx, _, mut stack| {
+        Callback::from_fn(&ctx, |ctx, mut exec, mut stack| {
             let string = stack.consume::<String>(ctx)?;
+            exec.fuel()
+                .consume(sandbox::output_cost(string.len() as usize));
             let lowered = ctx.intern(
                 &string
                     .as_bytes()
@@ -87,8 +153,10 @@ pub fn load_string<'gc>(ctx: Context<'gc>) {
     string.set_field(
         ctx,
         "reverse",
-        Callback::from_fn(&ctx, |ctx, _, mut stack| {
+        Callback::from_fn(&ctx, |ctx, mut exec, mut stack| {
             let string = stack.consume::<String>(ctx)?;
+            exec.fuel()
+                .consume(sandbox::output_cost(string.len() as usize));
             let reversed = ctx.intern(&string.as_bytes().iter().copied().rev().collect::<Vec<_>>());
             stack.replace(ctx, reversed);
             Ok(CallbackReturn::Return)
@@ -98,8 +166,10 @@ pub fn load_string<'gc>(ctx: Context<'gc>) {
     string.set_field(
         ctx,
         "upper",
-        Callback::from_fn(&ctx, |ctx, _, mut stack| {
+        Callback::from_fn(&ctx, |ctx, mut exec, mut stack| {
             let string = stack.consume::<String>(ctx)?;
+            exec.fuel()
+                .consume(sandbox::output_cost(string.len() as usize));
             let uppered = ctx.intern(
                 &string
                     .as_bytes()
@@ -125,20 +195,14 @@ pub fn load_string<'gc>(ctx: Context<'gc>) {
 
             let args: Vec<Value> = stack.into_iter().collect();
 
-            let formatted = format::format(&ctx, formatstring, &args).map_err(|err| {
-                let err = err.to_string();
-                err.into_value(ctx)
-            })?;
-
-            stack.replace(ctx, formatted);
-            Ok(CallbackReturn::Return)
+            format::FormatSequence::create(ctx, formatstring, args)
         }),
     );
 
     string.set_field(
         ctx,
         "rep",
-        Callback::from_fn(&ctx, |ctx, _, mut stack| {
+        Callback::from_fn(&ctx, |ctx, mut exec, mut stack| {
             let (s, n, sep) = stack.consume::<(String, i64, Option<String>)>(ctx)?;
 
             if n <= 0 {
@@ -174,6 +238,12 @@ pub fn load_string<'gc>(ctx: Context<'gc>) {
                 return Ok(CallbackReturn::Return);
             }
 
+            // `string.rep` is proven constant-bounded: the checked capacity above
+            // caps the result at `MAX_STRING_REP_BYTES`, so the copy loop cannot
+            // exceed a fixed wall slice. Charge the bytes it writes so that the
+            // work is still accounted deterministically.
+            exec.fuel().consume(sandbox::output_cost(capacity));
+
             let mut result = Vec::with_capacity(capacity);
             result.extend_from_slice(s_bytes);
             if sep_bytes.is_empty() {
@@ -205,10 +275,7 @@ pub fn load_string<'gc>(ctx: Context<'gc>) {
 
             let args: Vec<Value> = stack.into_iter().collect();
 
-            let bytes = pack::process(fmt_str, ctx, &args)?;
-
-            stack.replace(ctx, ctx.intern(&bytes));
-            Ok(CallbackReturn::Return)
+            Ok(pack::PackSequence::create(ctx, fmt_str, args))
         }),
     );
 
@@ -244,13 +311,9 @@ pub fn load_string<'gc>(ctx: Context<'gc>) {
 
             let start_pos = pos - 1;
 
-            let (values, next_pos) = unpack::process(fmt_str, bytes, start_pos, ctx)?;
-
-            stack.clear();
-            stack.extend(values);
-            stack.push_back(Value::Integer(next_pos as i64));
-
-            Ok(CallbackReturn::Return)
+            Ok(unpack::UnpackSequence::create(
+                ctx, fmt_str, bytes, start_pos,
+            ))
         }),
     );
 
@@ -261,10 +324,7 @@ pub fn load_string<'gc>(ctx: Context<'gc>) {
             let fmt = stack.consume::<String>(ctx)?;
             let fmt_str = fmt.to_str()?;
 
-            let total_size = packsize::process(fmt_str, ctx)?;
-
-            stack.replace(ctx, total_size as i64);
-            Ok(CallbackReturn::Return)
+            Ok(packsize::PacksizeSequence::create(ctx, fmt_str))
         }),
     );
 
@@ -302,7 +362,8 @@ fn sub(string: &[u8], i: i64, j: Option<i64>) -> Result<&[u8], std::num::TryFrom
     })
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, gc_arena::Collect)]
+#[collect(require_static)]
 pub(crate) enum Endianness {
     Little,
     Big,
@@ -315,7 +376,8 @@ impl Default for Endianness {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, gc_arena::Collect)]
+#[collect(require_static)]
 pub(crate) struct FormatState {
     pub endianness: Endianness,
     pub max_alignment: usize,
@@ -327,29 +389,6 @@ impl Default for FormatState {
             endianness: Endianness::Native,
             max_alignment: 1,
         }
-    }
-}
-
-pub(crate) fn parse_number(
-    chars: &mut std::iter::Peekable<std::str::Chars>,
-) -> Result<Option<usize>, std::string::String> {
-    let mut n_str = std::string::String::new();
-    while let Some(&c) = chars.peek() {
-        if c.is_ascii_digit() {
-            n_str.push(c);
-            chars.next();
-        } else {
-            break;
-        }
-    }
-
-    if n_str.is_empty() {
-        Ok(None)
-    } else {
-        let n = n_str
-            .parse::<usize>()
-            .map_err(|_| format!("invalid number '{}' in format string", n_str))?;
-        Ok(Some(n))
     }
 }
 

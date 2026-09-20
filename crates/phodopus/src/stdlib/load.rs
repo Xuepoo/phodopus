@@ -175,7 +175,7 @@ impl<'gc> Sequence<'gc> for BuildLoadString<'gc> {
     fn poll(
         mut self: Pin<&mut Self>,
         ctx: Context<'gc>,
-        _exec: Execution<'gc, '_>,
+        mut exec: Execution<'gc, '_>,
         mut stack: Stack<'gc, '_>,
     ) -> Result<SequencePoll<'gc>, Error<'gc>> {
         stack.resize(self.step);
@@ -194,6 +194,10 @@ impl<'gc> Sequence<'gc> for BuildLoadString<'gc> {
                         return Ok(SequencePoll::Return);
                     };
                     *v = Value::String(s);
+                    // Assembling one piece copies its bytes; charge the copy
+                    // proportionally. Total length is already capped by
+                    // `MAX_CHUNK_SIZE`.
+                    exec.fuel().consume(count_fuel(1, s.len() as usize));
                     self.total_len += s.len() as usize;
                     if self.total_len > MAX_CHUNK_SIZE {
                         stack.replace(ctx, (Value::Nil, "chunk too large"));
@@ -207,6 +211,7 @@ impl<'gc> Sequence<'gc> for BuildLoadString<'gc> {
                 // function is done.
                 stack.pop_back();
                 let str = self.finalize(ctx, &mut stack);
+                exec.fuel().consume(count_fuel(1, str.len() as usize));
                 stack.push_back(Value::String(str));
                 return Ok(SequencePoll::TailCall(self.then));
             }

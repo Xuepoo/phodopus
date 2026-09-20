@@ -105,6 +105,14 @@ Flags, width, and precision modifiers:
 - Maximum field width is bounded to 1000 characters to prevent memory-bomb attacks (e.g. `%999999999s`).
 - Maximum precision is bounded to 1000 digits.
 - Specifiers exceeding bounds or containing invalid syntax trigger format errors.
+- `string.format` is implemented as a resumable
+  `Sequence` (`FormatSequence`): the format string is parsed into owned
+  elements once, each `poll` expands directives until the remaining Fuel runs
+  out, then returns `SequencePoll::Pending` with the partial output preserved.
+  Verbatim runs are emitted in Fuel-sized chunks at UTF-8 boundaries. Each
+  conversion directive costs `4` Fuel plus `1` per output byte.
+- Total output is capped by the checked `MAX_STDLIB_STRING_BYTES` (16 MiB);
+  exceeding it raises `"resulting string too large"`.
 
 ### 4.2 Authentic Lua Pattern Matching
 
@@ -124,6 +132,11 @@ Instead, Phodopus incorporates an authentic Lua pattern engine (`lsonar` 0.2.4) 
    - `string.gsub(s, pattern, repl [, n])`: String and table substitutions bounded by optional maximum count `n`. If `repl` is a table, lookups use the first capture (or entire match if no captures); string and number values substitute, whereas `false` or `nil` values retain the original match. Function replacement raises a clean descriptive error.
 7. **Error Handling**: Malformed patterns raise standard Lua errors formatted as `malformed pattern (...)` rather than panicking.
 
+8. **Fuel & Resumption Cost Model**:
+   - `string.gsub` is implemented as a resumable `Sequence` (`GsubSequence`). Each `poll` performs as many search/replace iterations as the remaining Fuel allows, then returns `SequencePoll::Pending` with the output buffer, cursor, replacement count, and replacement mode preserved. Output is capped by the checked `MAX_STDLIB_STRING_BYTES` (16 MiB).
+   - Each pattern search charges `16` Fuel per candidate start position in the remaining window (`remaining_bytes + 1` attempts), plus `1` Fuel per output byte appended.
+   - `string.find` and `string.match` charge the scanned bytes plus the attempt bound for their single unanchored search. Each `string.gmatch` iteration charges the remaining scan window, its attempt bound, and the bytes it produces as captures. The `lsonar` engine call itself is bounded by `MAX_RECURSION_DEPTH` (500) and the input window and is not preemptible below one call; this residual bound is documented in `sandbox-and-fuel.md` §4.1.3.
+
 ### 4.3 Unicode Support (`utf8` Library)
 
 The `utf8` module is implemented in `crates/phodopus/src/stdlib/utf8.rs` and loaded by default via `load_core()` or modularly via `lua.load_utf8()`. It implements standard Lua 5.3/5.4 functions:
@@ -136,6 +149,8 @@ The `utf8` module is implemented in `crates/phodopus/src/stdlib/utf8.rs` and loa
 - `utf8.codes(s [, lax])`: Iterates over pairs of `(byte_position, code_point)`.
 
 **Architectural Invariant**: The standard `utf8` library measures **code points**, not terminal visual cell width. Grapheme clusters, emoji modifiers, and East Asian double-width characters (`unicode-width`, `unicode-segmentation`) belong strictly to the higher-level terminal host ABI (`bitty.text`), preserving strict Lua conformance in Phodopus.
+
+**Fuel & Resumption Cost Model**: `utf8.len`, `utf8.codepoint`, and `utf8.offset` are implemented as resumable `Sequence`s that scan one code point at a time, charge `1` Fuel per byte examined, and return `SequencePoll::Pending` when Fuel is exhausted while preserving the byte cursor. `utf8.char` charges `1` Fuel per output byte and enforces the checked `MAX_STDLIB_STRING_BYTES` (16 MiB) ceiling; each `utf8.codes` iterator step charges the bytes it scans.
 
 ### 4.4 String Metatable and OOP Method Ergonomics
 
@@ -164,6 +179,7 @@ The `string.rep(s, n [, sep])` function generates a repeated string separated by
    - Buffer allocation size is strictly constrained by `MAX_STRING_REP_BYTES = 16 * 1024 * 1024` (16 MiB).
    - Total capacity calculation uses checked arithmetic (`checked_mul` and `checked_add`) across both `s` copies and `sep` delimiters.
    - Any arithmetic overflow or required capacity exceeding 16 MiB raises a standard Lua error (`"resulting string too large"`) rather than panicking or triggering out-of-memory crashes.
+   - `string.rep` is proven constant-bounded: the capacity is computed and checked before any allocation, so a single call cannot exceed a fixed wall slice. It still charges `1` Fuel per output byte so the work is accounted deterministically.
 
 ### 4.6 Binary Packing and Unpacking (`string.pack`, `string.unpack`, `string.packsize`)
 
@@ -191,6 +207,7 @@ Phodopus implements standard Lua 5.3 binary packing and unpacking according to s
    - Packed string allocation is strictly bounded by `MAX_STRING_PACK_BYTES = 16 * 1024 * 1024` (16 MiB sandbox ceiling).
    - All arithmetic on buffers, offsets, and string sizes uses checked arithmetic to prevent integer overflow.
    - Bounds errors, out-of-range integers, strings exceeding fixed buffer sizes, premature string termination during unpacking, and out-of-bounds `pos` values fail gracefully with standard Lua errors.
+   - `string.pack`, `string.unpack`, and `string.packsize` are implemented as resumable `Sequence`s (`PackSequence`, `UnpackSequence`, `PacksizeSequence`) that advance a byte cursor over the format string, charge `1` Fuel per format byte, and return `SequencePoll::Pending` between format options when Fuel is exhausted. The cursor and partial output are preserved across resumption.
 
 ### 4.7 Sandboxed Dynamic Code Loading (`load`) and Global `_G`
 
@@ -237,3 +254,4 @@ Phodopus implements Lua 5.4 standard `load(chunk [, chunkname [, mode [, env]]])
 5. **String Repetition Ceiling & DoS Protection**: Assert that `string.rep` with astronomical counts (e.g. `string.rep("a", 1000000000)` or arithmetic overflow with `i64::MAX`) safely fails via `pcall` with `"resulting string too large"`, without memory blowup or panics.
 6. **Binary Pack/Unpack Conformance & Sandbox Ceiling**: Assert round-trip fidelity across all integer widths, endianness flags, floating-point encodings, padding/alignment options, and string types in `crates/phodopus/tests/scripts/pack.lua`. Assert that requests exceeding the 16 MiB allocation ceiling safely fail via `pcall` without memory exhaustion.
 7. **Sandboxed Dynamic Loading Conformance**: Assert in `crates/phodopus/tests/scripts/load.lua` and `globals.lua` that basic and piecewise string loading, argument passing, chunkname preservation in tracebacks, custom `_ENV` table sandboxing, syntax error returns (`nil, string`), and binary chunk rejections (`mode = "b"` or bytecode magic) operate without panics.
+8. **Variable-Cost Fuel Interruption**: Assert in `crates/phodopus/tests/fuel_stdlib.rs` that under a small Fuel budget `string.format`, `string.gsub`, `utf8.len`, `utf8.codepoint`, and `string.pack`/`unpack` are preempted at least once and resume to the same result, and that hostile `format`/`gsub` growth over 16 MiB fails via `pcall` with `"resulting string too large"`.

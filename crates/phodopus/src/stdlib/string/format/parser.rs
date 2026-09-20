@@ -4,9 +4,9 @@ pub const MAX_WIDTH: usize = 1000;
 pub const MAX_PRECISION: usize = 1000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FormatElement<'a> {
+pub(crate) enum FormatElement {
     /// Some characters that are copied to the output as-is
-    Verbatim(&'a str),
+    Verbatim(String),
     /// A format specifier
     Format(ConversionSpecifier),
 }
@@ -85,20 +85,20 @@ pub enum ConversionType {
     PercentSign,
 }
 
-pub fn parse_format_string(fmt: &str) -> Result<Vec<FormatElement<'_>>, FormatError> {
+pub(crate) fn parse_format_string(fmt: &str) -> Result<Vec<FormatElement>, FormatError> {
     let mut res = Vec::new();
     let mut rem = fmt;
 
     while !rem.is_empty() {
         if let Some((verbatim_prefix, rest)) = rem.split_once('%') {
             if !verbatim_prefix.is_empty() {
-                res.push(FormatElement::Verbatim(verbatim_prefix));
+                res.push(FormatElement::Verbatim(verbatim_prefix.to_string()));
             }
             let (spec, rest) = take_conversion_specifier(rest)?;
             res.push(FormatElement::Format(spec));
             rem = rest;
         } else {
-            res.push(FormatElement::Verbatim(rem));
+            res.push(FormatElement::Verbatim(rem.to_string()));
             break;
         }
     }

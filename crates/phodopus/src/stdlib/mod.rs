@@ -4,6 +4,7 @@ mod debug;
 mod io;
 mod load;
 mod math;
+pub(crate) mod sandbox;
 mod string;
 mod table;
 pub mod utf8;

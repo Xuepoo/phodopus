@@ -1,13 +1,19 @@
+use std::pin::Pin;
+
 use fhex::ToHex;
+use gc_arena::Collect;
 use parser::{
     ConversionSpecifier, ConversionType, FormatElement, NumericParam, parse_format_string,
 };
 use thiserror::Error;
 
 use crate::{
-    Context, Value,
+    BoxSequence, CallbackReturn, Context, Error, Execution, IntoValue, Sequence, SequencePoll,
+    Stack, Value,
     meta_ops::{self, MetaResult},
 };
+
+use super::super::sandbox::{self, FUEL_PER_FORMAT_DIRECTIVE};
 
 mod parser;
 
@@ -25,45 +31,173 @@ pub enum FormatError {
     Unknown,
 }
 
-pub fn format<'gc>(
-    ctx: &Context<'gc>,
-    format_str: &str,
-    args: &[Value<'gc>],
-) -> Result<String, FormatError> {
-    let format_elements = parse_format_string(format_str)?;
-    let mut res = String::new();
-    let mut remaining_args = args;
+/// A resumable implementation of `string.format`.
+///
+/// The format string is parsed once into owned elements, and each `poll`
+/// expands as many directives as the remaining Fuel allows before returning
+/// [`SequencePoll::Pending`]. The partially-built output is preserved in the
+/// sequence, so replenishing Fuel resumes exactly where the previous poll
+/// stopped. Output growth is checked against [`MAX_STDLIB_STRING_BYTES`] before
+/// every append, independent of any global heap quota.
+#[derive(Collect)]
+#[collect(no_drop)]
+pub(crate) struct FormatSequence<'gc> {
+    #[collect(require_static)]
+    elements: Vec<FormatElement>,
+    element_index: usize,
+    verbatim_offset: usize,
+    args: Vec<Value<'gc>>,
+    arg_index: usize,
+    #[collect(require_static)]
+    res: String,
+}
 
-    let mut pop_arg = || {
-        if remaining_args.is_empty() {
-            Err(FormatError::NotEnoughArgs)
-        } else {
-            let a = remaining_args[0];
-            remaining_args = &remaining_args[1..];
-            Ok(a)
-        }
-    };
+impl<'gc> FormatSequence<'gc> {
+    pub(crate) fn create(
+        ctx: Context<'gc>,
+        format_str: &str,
+        args: Vec<Value<'gc>>,
+    ) -> Result<CallbackReturn<'gc>, Error<'gc>> {
+        let elements = parse_format_string(format_str)
+            .map_err(|err| Error::from_value(FormatError::to_lua(ctx, err)))?;
+        Ok(CallbackReturn::Sequence(BoxSequence::new(
+            &ctx,
+            FormatSequence {
+                elements,
+                element_index: 0,
+                verbatim_offset: 0,
+                args,
+                arg_index: 0,
+                res: String::new(),
+            },
+        )))
+    }
+}
 
-    for element in format_elements {
-        match element {
-            FormatElement::Verbatim(s) => {
-                res.push_str(s);
-            }
-            FormatElement::Format(spec) => {
-                if spec.conversion_type == ConversionType::PercentSign {
-                    res.push('%');
-                } else {
-                    let arg = pop_arg()?;
-                    res.push_str(&format_value(*ctx, arg, &spec)?);
+impl<'gc> Sequence<'gc> for FormatSequence<'gc> {
+    fn poll(
+        mut self: Pin<&mut Self>,
+        ctx: Context<'gc>,
+        mut exec: Execution<'gc, '_>,
+        mut stack: Stack<'gc, '_>,
+    ) -> Result<SequencePoll<'gc>, Error<'gc>> {
+        let seq = self.as_mut().get_mut();
+
+        // `elements` is borrowed for the whole loop; `seq.res`, `seq.arg_index`,
+        // `seq.element_index`, and `seq.verbatim_offset` are disjoint fields.
+        let elements = &seq.elements;
+        // Safety of disjoint field access: all fields below are distinct.
+        let res = &mut seq.res;
+        let arg_index = &mut seq.arg_index;
+        let element_index = &mut seq.element_index;
+        let verbatim_offset = &mut seq.verbatim_offset;
+        let args = &seq.args;
+        let fuel = exec.fuel();
+
+        while *element_index < elements.len() {
+            match &elements[*element_index] {
+                FormatElement::Verbatim(text) => {
+                    let remaining = &text[*verbatim_offset..];
+                    if remaining.is_empty() {
+                        *element_index += 1;
+                        *verbatim_offset = 0;
+                        continue;
+                    }
+
+                    let chunk_len = verbatim_chunk_len(
+                        remaining,
+                        sandbox::work_batch(fuel, sandbox::FUEL_PER_OUTPUT_BYTE),
+                    );
+                    sandbox::checked_output_growth(res.len(), chunk_len).ok_or_else(|| {
+                        Error::from_value("resulting string too large".into_value(ctx))
+                    })?;
+                    res.push_str(&remaining[..chunk_len]);
+                    fuel.consume(sandbox::output_cost(chunk_len));
+                    *verbatim_offset += chunk_len;
+                }
+                FormatElement::Format(spec) => {
+                    if spec.conversion_type == ConversionType::PercentSign {
+                        if sandbox::checked_output_growth(res.len(), 1).is_none() {
+                            return Err(Error::from_value(
+                                "resulting string too large".into_value(ctx),
+                            ));
+                        }
+                        res.push('%');
+                        fuel.consume(FUEL_PER_FORMAT_DIRECTIVE);
+                        *element_index += 1;
+                        *verbatim_offset = 0;
+                        continue;
+                    }
+
+                    if *arg_index >= args.len() {
+                        return Err(Error::from_value(FormatError::to_lua(
+                            ctx,
+                            FormatError::NotEnoughArgs,
+                        )));
+                    }
+                    let arg = args[*arg_index];
+                    *arg_index += 1;
+                    let spec = *spec;
+
+                    let expansion = format_value(ctx, arg, &spec)
+                        .map_err(|err| Error::from_value(FormatError::to_lua(ctx, err)))?;
+                    if sandbox::checked_output_growth(res.len(), expansion.len()).is_none() {
+                        return Err(Error::from_value(
+                            "resulting string too large".into_value(ctx),
+                        ));
+                    }
+                    res.push_str(&expansion);
+                    fuel.consume(
+                        FUEL_PER_FORMAT_DIRECTIVE
+                            .saturating_add(sandbox::output_cost(expansion.len())),
+                    );
+                    *element_index += 1;
+                    *verbatim_offset = 0;
                 }
             }
-        }
-    }
 
-    if remaining_args.is_empty() {
-        Ok(res)
+            if !fuel.should_continue() {
+                return Ok(SequencePoll::Pending);
+            }
+        }
+
+        if *arg_index != args.len() {
+            return Err(Error::from_value(FormatError::to_lua(
+                ctx,
+                FormatError::TooManyArgs,
+            )));
+        }
+
+        let result = ctx.intern(res.as_bytes());
+        stack.replace(ctx, result);
+        Ok(SequencePoll::Return)
+    }
+}
+
+/// Returns the length of the largest UTF-8 boundary-respecting prefix of `text`
+/// no longer than `budget` bytes. Always at least one character so callers make
+/// forward progress.
+fn verbatim_chunk_len(text: &str, budget: usize) -> usize {
+    if text.len() <= budget {
+        return text.len();
+    }
+    let mut boundary = budget.max(1);
+    while boundary > 0 && !text.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    if boundary == 0 {
+        text.chars()
+            .next()
+            .map(|c| c.len_utf8())
+            .unwrap_or(text.len())
     } else {
-        Err(FormatError::TooManyArgs)
+        boundary
+    }
+}
+
+impl FormatError {
+    fn to_lua<'gc>(ctx: Context<'gc>, err: FormatError) -> crate::Value<'gc> {
+        err.to_string().into_value(ctx)
     }
 }
 

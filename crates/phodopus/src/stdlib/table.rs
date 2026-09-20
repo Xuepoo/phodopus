@@ -68,10 +68,18 @@ pub fn load_table<'gc>(ctx: Context<'gc>) {
         Callback::from_fn_with(&ctx, unpack, move |unpack, ctx, _exec, mut stack| {
             let sep = stack.remove(1).unwrap_or_default();
 
-            let then_impl = Callback::from_fn_with(&ctx, sep, |sep, ctx, _, mut stack| {
+            let then_impl = Callback::from_fn_with(&ctx, sep, |sep, ctx, mut exec, mut stack| {
                 let values = &stack[..];
                 match concat_separated(ctx, values, *sep)? {
                     ConcatMetaResult::Value(v) => {
+                        // `table.concat` output is bounded by the sum of the
+                        // already-resident input values, but the copy loop still
+                        // does proportional work; charge it so the operation is
+                        // accounted rather than free.
+                        if let Value::String(s) = v {
+                            exec.fuel()
+                                .consume(super::sandbox::output_cost(s.as_bytes().len()));
+                        }
                         stack.replace(ctx, v);
                         Ok(CallbackReturn::Return)
                     }

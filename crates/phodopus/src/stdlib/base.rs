@@ -16,7 +16,7 @@ pub fn load_base<'gc>(ctx: Context<'gc>) {
 
     ctx.set_global(
         "tonumber",
-        Callback::from_fn(&ctx, |ctx, _, mut stack| {
+        Callback::from_fn(&ctx, |ctx, mut exec, mut stack| {
             use crate::compiler::string_utils::{read_neg, trim_whitespace};
 
             fn extract_number_data(bytes: &[u8]) -> (&[u8], bool) {
@@ -29,6 +29,14 @@ pub fn load_base<'gc>(ctx: Context<'gc>) {
                 Err("Missing argument(s) to tonumber".into_value(ctx))?
             } else if stack.len() == 1 || stack.get(1).is_nil() {
                 let prenumber = stack.consume::<Value>(ctx)?;
+                // `Value::to_numeric` scans the whole string representation when
+                // the argument is a string, so charge the examined bytes. Without
+                // this a huge non-numeric string would bypass Fuel entirely.
+                if let Value::String(s) = prenumber {
+                    let (bytes, _) = extract_number_data(s.as_bytes());
+                    exec.fuel()
+                        .consume(crate::stdlib::sandbox::scanned_cost(bytes.len()));
+                }
                 stack.replace(ctx, prenumber.to_numeric().unwrap_or(Value::Nil));
             } else {
                 let (value, base) = stack.consume::<(Value, i64)>(ctx)?;
@@ -47,6 +55,9 @@ pub fn load_base<'gc>(ctx: Context<'gc>) {
                     Err("base out of range".into_value(ctx))?;
                 }
                 let (bytes, is_neg) = extract_number_data(s.as_bytes());
+                // Charge the digit scan proportionally.
+                exec.fuel()
+                    .consume(crate::stdlib::sandbox::scanned_cost(bytes.len()));
                 let result = bytes
                     .iter()
                     .map(|b| {

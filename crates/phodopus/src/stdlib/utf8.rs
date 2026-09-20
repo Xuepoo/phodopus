@@ -1,12 +1,18 @@
 use crate::{Callback, CallbackReturn, Context, IntoValue, String, Table, Value};
 
+use super::sandbox;
+
+mod sequences;
+
+use sequences::{CodepointSequence, LenSequence, OffsetSequence};
+
 #[inline]
 fn iscont(b: u8) -> bool {
     (b & 0xC0) == 0x80
 }
 
 #[inline]
-fn u_posrelat(pos: i64, len: usize) -> i64 {
+pub(crate) fn u_posrelat(pos: i64, len: usize) -> i64 {
     if pos >= 0 {
         pos
     } else if (pos as u64).wrapping_neg() > len as u64 {
@@ -16,7 +22,7 @@ fn u_posrelat(pos: i64, len: usize) -> i64 {
     }
 }
 
-fn decode_utf8(bytes: &[u8]) -> Option<(char, usize)> {
+pub(crate) fn decode_utf8(bytes: &[u8]) -> Option<(char, usize)> {
     if bytes.is_empty() {
         return None;
     }
@@ -46,7 +52,7 @@ pub fn load_utf8<'gc>(ctx: Context<'gc>) {
     utf8.set_field(
         ctx,
         "char",
-        Callback::from_fn(&ctx, |ctx, _, mut stack| {
+        Callback::from_fn(&ctx, |ctx, mut exec, mut stack| {
             let mut bytes = Vec::with_capacity(stack.len() * 4);
             for (idx, val) in stack.into_iter().enumerate() {
                 let code = match val.to_integer() {
@@ -75,7 +81,12 @@ pub fn load_utf8<'gc>(ctx: Context<'gc>) {
                 };
 
                 let mut buf = [0u8; 4];
-                bytes.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
+                let encoded = ch.encode_utf8(&mut buf).as_bytes();
+                if sandbox::checked_output_growth(bytes.len(), encoded.len()).is_none() {
+                    return Err("resulting string too large".into_value(ctx).into());
+                }
+                exec.fuel().consume(sandbox::output_cost(encoded.len()));
+                bytes.extend_from_slice(encoded);
             }
 
             let result = ctx.intern(&bytes);
@@ -102,14 +113,12 @@ pub fn load_utf8<'gc>(ctx: Context<'gc>) {
                     .into());
             }
 
-            let iter_fn = Callback::from_fn(&ctx, |ctx, _, mut stack| {
+            let iter_fn = Callback::from_fn(&ctx, |ctx, mut exec, mut stack| {
                 let (s, n): (String, i64) = stack.consume(ctx)?;
                 let bytes = s.as_bytes();
                 let len = bytes.len();
 
-                let n = if n < 0 {
-                    0
-                } else if n == 0 {
+                let n = if n <= 0 {
                     0
                 } else {
                     let mut pos = (n as usize) - 1;
@@ -121,6 +130,10 @@ pub fn load_utf8<'gc>(ctx: Context<'gc>) {
                     }
                     pos
                 };
+
+                // The scan above is bounded by the input length; charge it so
+                // repeated `gmatch`-style iteration is accounted.
+                exec.fuel().consume(sandbox::scanned_cost(n));
 
                 if n >= len {
                     stack.replace(ctx, (Value::Nil, Value::Nil));
@@ -174,20 +187,7 @@ pub fn load_utf8<'gc>(ctx: Context<'gc>) {
                 return Ok(CallbackReturn::Return);
             }
 
-            let start = (posi - 1) as usize;
-            let end = pose as usize;
-
-            let mut pos = start;
-            while pos < end {
-                let (c, char_len) = match decode_utf8(&bytes[pos..]) {
-                    Some(res) => res,
-                    None => return Err("invalid UTF-8 code".into_value(ctx).into()),
-                };
-                stack.push_back(Value::Integer(c as u32 as i64));
-                pos += char_len;
-            }
-
-            Ok(CallbackReturn::Return)
+            Ok(CodepointSequence::create(ctx, bytes, posi, pose))
         }),
     );
 
@@ -222,25 +222,7 @@ pub fn load_utf8<'gc>(ctx: Context<'gc>) {
                 return Ok(CallbackReturn::Return);
             }
 
-            let mut start = (posi - 1) as usize;
-            let end = posj as usize;
-
-            let mut count = 0i64;
-            while start < end {
-                match decode_utf8(&bytes[start..]) {
-                    Some((_, char_len)) => {
-                        count += 1;
-                        start += char_len;
-                    }
-                    None => {
-                        stack.replace(ctx, (Value::Nil, (start as i64) + 1));
-                        return Ok(CallbackReturn::Return);
-                    }
-                }
-            }
-
-            stack.replace(ctx, count);
-            Ok(CallbackReturn::Return)
+            Ok(LenSequence::create(ctx, bytes, posi, posj))
         }),
     );
 
@@ -261,14 +243,10 @@ pub fn load_utf8<'gc>(ctx: Context<'gc>) {
                     .into());
             }
 
-            let mut pos = (posi - 1) as usize;
+            let pos = (posi - 1) as usize;
 
             if n == 0 {
-                while pos > 0 && pos < len && iscont(bytes[pos]) {
-                    pos -= 1;
-                }
-                stack.replace(ctx, (pos as i64) + 1);
-                return Ok(CallbackReturn::Return);
+                return Ok(OffsetSequence::create(ctx, bytes, pos, 0, 0));
             }
 
             if pos < len && iscont(bytes[pos]) {
@@ -278,41 +256,10 @@ pub fn load_utf8<'gc>(ctx: Context<'gc>) {
             }
 
             if n < 0 {
-                let mut n = n;
-                while n < 0 && pos > 0 {
-                    loop {
-                        pos -= 1;
-                        if pos == 0 || !iscont(bytes[pos]) {
-                            break;
-                        }
-                    }
-                    n += 1;
-                }
-                if n == 0 {
-                    stack.replace(ctx, (pos as i64) + 1);
-                } else {
-                    stack.replace(ctx, Value::Nil);
-                }
-                return Ok(CallbackReturn::Return);
-            }
-
-            let mut n = n - 1;
-            while n > 0 && pos < len {
-                loop {
-                    pos += 1;
-                    if pos >= len || !iscont(bytes[pos]) {
-                        break;
-                    }
-                }
-                n -= 1;
-            }
-
-            if n == 0 {
-                stack.replace(ctx, (pos as i64) + 1);
+                Ok(OffsetSequence::create(ctx, bytes, pos, n, -1))
             } else {
-                stack.replace(ctx, Value::Nil);
+                Ok(OffsetSequence::create(ctx, bytes, pos, n, 1))
             }
-            Ok(CallbackReturn::Return)
         }),
     );
 
