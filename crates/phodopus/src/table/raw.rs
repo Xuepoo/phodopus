@@ -151,6 +151,9 @@ impl<'gc> RawTable<'gc> {
         // entry.
         let raw_map = self.map.raw_table_mut();
         if let Some(bucket) = raw_map.find(hash, |(k, _)| k.eq(table_key)) {
+            // SAFETY: `bucket` was yielded by `raw_map`, which is borrowed mutably for the rest of
+            // this call; the borrow checker prevents any other reference to the bucket from
+            // coexisting, so reconstructing the mutable reference is sound.
             let (k, v) = unsafe { bucket.as_mut() };
             if k.is_dead_key() {
                 // Resurrect the key if it is dead.
@@ -351,6 +354,9 @@ impl<'gc> RawTable<'gc> {
                 }
             }
 
+            // SAFETY: `raw_table` is borrowed from `self.map` for the duration of this method and
+            // no mutation occurs while iterating, so each bucket index and bucket reference stays
+            // valid for the whole scan.
             unsafe {
                 for bucket_index in 0..raw_table.buckets() {
                     if raw_table.is_bucket_full(bucket_index) {
@@ -377,6 +383,9 @@ impl<'gc> RawTable<'gc> {
             if let Some(bucket) = raw_table.find(self.hash_builder.hash_one(table_key), |(k, _)| {
                 k.eq(table_key)
             }) {
+                // SAFETY: `bucket` was found in `raw_table` above and `raw_table` is borrowed for
+                // the duration of this method, so its bucket index and the buckets after it remain
+                // valid references.
                 unsafe {
                     let bucket_index = raw_table.bucket_index(&bucket);
                     for i in bucket_index + 1..raw_table.buckets() {

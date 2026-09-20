@@ -166,6 +166,11 @@ impl<'h, 'f, F: for<'a> Freeze<'a>> FreezeGuard<'h, 'f, F> {
         // 3) The 'static `Frozen<F>` handles must have their values unset before the body of
         //    this function ends because we only know they live for at least the body of this
         //    function, and we use drop guards for this.
+        //
+        // SAFETY: `DropGuard::new` is unsafe because it calls the private `ScopeGuard::set`, which
+        // is only sound when paired with the matching `unset` performed by `Drop`; the guard is an
+        // RAII value whose `Drop` runs before this function returns (including on early return via
+        // `?` or panic), so the requirement is discharged here.
         let _guard = unsafe { DropGuard::new(self) };
         cb()
     }
@@ -179,12 +184,19 @@ impl<'h, 'f, F: for<'a> Freeze<'a>> FreezeGuard<'h, 'f, F> {
 }
 
 impl<'h, 'f, F: for<'a> Freeze<'a>> ScopeGuard for FreezeGuard<'h, 'f, F> {
+    // SAFETY: `set` transmutes the `'f`-bound value to `'static`; this is sound only because
+    // `unset` restores the original lifetime before `scope` returns. `assert!` rejects re-entrant
+    // use of an already-set handle so a nested guard cannot overwrite the live value.
     unsafe fn set(&mut self) {
         assert!(
             !self.handle.is_valid(),
             "handle already used in another `FreezeGuard::scope` call"
         );
         let value = unsafe {
+            // SAFETY: This reverses the `'f` -> `'static` erasure performed by `DropGuard::new`
+            // before the `FreezeGuard` is dropped. The stored `'static` value was produced by
+            // `set` from a value of this same `'f` lifetime, and `unset` runs before the borrowed
+            // value expires, so the transmute restores the original lifetime exactly.
             mem::transmute::<<F as Freeze<'f>>::Frozen, <F as Freeze<'static>>::Frozen>(
                 self.value.take().unwrap(),
             )
@@ -194,6 +206,9 @@ impl<'h, 'f, F: for<'a> Freeze<'a>> ScopeGuard for FreezeGuard<'h, 'f, F> {
 
     fn unset(&mut self) {
         if let Ok(mut v) = self.handle.inner.try_borrow_mut() {
+            // SAFETY: This reinstates the `'f` lifetime onto the value previously erased to
+            // `'static` by `set`. Both the value's origin and `scope`'s drop ordering guarantee
+            // it is still live; the `try_borrow_mut` above ensures no live reference to it exists.
             unsafe {
                 self.value = Some(mem::transmute::<
                     <F as Freeze<'static>>::Frozen,
@@ -266,6 +281,9 @@ impl<D: FrozenScopeGuard> FrozenScope<D> {
     /// `FrozenScope::scope` call or if any handles were set with `FrozenScope::freeze` more than
     /// once. The given handles must be used with only one `FrozenScope` at a time.
     pub fn scope<R>(&mut self, cb: impl FnOnce() -> R) -> R {
+        // SAFETY: `DropGuard::new` calls the private `ScopeGuard::set`; soundness requires the
+        // matching `unset` to run before any borrowed value's lifetime ends. `Drop` provides that
+        // guarantee before this function returns.
         let _guard = unsafe { DropGuard::new(&mut self.0) };
         cb()
     }
@@ -303,12 +321,19 @@ trait ScopeGuard {
 }
 
 impl ScopeGuard for () {
+    // SAFETY: The unit guard holds no value, so there is nothing to erase or restore; `set`/`unset`
+    // are no-ops and cannot violate any lifetime invariant.
     unsafe fn set(&mut self) {}
     fn unset(&mut self) {}
 }
 
 impl<A: ScopeGuard, B: ScopeGuard> ScopeGuard for (A, B) {
+    // SAFETY: Forwarding `set` to each component preserves the contract that each component's
+    // `unset` runs before its borrowed value expires; the tuple's `unset` calls them in the same
+    // order.
     unsafe fn set(&mut self) {
+        // SAFETY: `set` is called with the same preconditions as this method's contract; the tuple
+        // is not shared, so both fields can be set sequentially.
         unsafe {
             self.0.set();
             self.1.set();
@@ -324,7 +349,12 @@ impl<A: ScopeGuard, B: ScopeGuard> ScopeGuard for (A, B) {
 struct DropGuard<'a, S: ScopeGuard>(&'a mut S);
 
 impl<'a, S: ScopeGuard> DropGuard<'a, S> {
+    // SAFETY: Constructing the guard calls `ScopeGuard::set`, so the caller takes on that method's
+    // safety contract; because the guard stores a mutable borrow of `s` and unsets it in `Drop`,
+    // the value cannot outlive the guard.
     unsafe fn new(s: &'a mut S) -> Self {
+        // SAFETY: The caller guarantees the `ScopeGuard::set` preconditions, which are forwarded
+        // unchanged to this call.
         unsafe {
             s.set();
         }
@@ -396,5 +426,43 @@ mod tests {
             fi.with(|f| assert_eq!(**f, 4));
             fj.with(|f| assert_eq!(**f, 5));
         });
+    }
+
+    /// Reusing the same handle in a nested scope must be rejected by the `set` invariant guard
+    /// rather than silently aliasing two live values.
+    #[test]
+    #[should_panic(expected = "handle already used in another `FreezeGuard::scope` call")]
+    fn nested_scope_on_same_handle_panics() {
+        type FrozenI32 = Frozen<Freeze![&'freeze i32]>;
+
+        let i = 4;
+        let j = 5;
+        let fi = FrozenI32::new();
+
+        let mut outer = FrozenScope::new().freeze(&fi, &i);
+        let mut inner = FrozenScope::new().freeze(&fi, &j);
+
+        outer.scope(|| inner.scope(|| fi.with(|f| assert_eq!(**f, 4))));
+    }
+
+    /// Once a scope ends, the same handle must be reusable; the `unset` restoration must not leave
+    /// the handle permanently valid or permanently poisoned.
+    #[test]
+    fn handle_is_reusable_after_scope() {
+        type FrozenI32 = Frozen<Freeze![&'freeze i32]>;
+
+        let i = 4;
+        let j = 5;
+        let fi = FrozenI32::new();
+
+        let mut first = FrozenScope::new().freeze(&fi, &i);
+        first.scope(|| fi.with(|f| assert_eq!(**f, 4)));
+        assert!(!fi.is_valid());
+
+        let mut second = FrozenScope::new().freeze(&fi, &j);
+        second.scope(|| fi.with(|f| assert_eq!(**f, 5)));
+        assert!(!fi.is_valid());
+
+        assert_eq!(fi.try_with(|_| ()), Err(AccessError::Expired));
     }
 }

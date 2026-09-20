@@ -83,17 +83,54 @@ Any Rust function exposed to Lua via `Callback::from_fn` crosses the trust bound
 
 ### 4.2 Unsafe Rust Boundary
 
-Unsafe Rust in Phodopus is strictly quarantined to:
+Phodopus is **not** a zero-`unsafe` crate. The correct assurance claim is _audited, justified, and
+gated_ `unsafe`. Every `unsafe` site is inventoried in the [Unsafe Code Ledger](unsafe-ledger.md)
+with its soundness invariant, owning module, and exercising test, and is enforced by
+`scripts/check-unsafe-ledger.sh`.
 
-1. `gc-arena` runtime primitives (tracing, pointer erasure).
-2. VM opcode dispatch and table hash slot access.
+Audited `unsafe` is confined to the following categories:
 
-Zero `unsafe` blocks are permitted in standard library implementations, user-facing callbacks, or module resolution logic.
+1. `gc-arena` runtime primitives: pointer erasure and header casts (`any.rs`, `string.rs`,
+   `callback.rs`), unchecked lock access during arena tracing, and manual `Collect` implementations.
+2. VM table hash-slot access (`table/raw.rs`) and the `Send`/`Sync` marker on the inert pointer
+   payload of `ExternLuaError` (`error.rs`).
+3. Host utility lifetime-erasure (`phodopus-util/src/freeze.rs`) and the async sequence trampoline
+   (`async_callback.rs`).
+
+`unsafe` is **forbidden** in standard library and compiler trees; the ledger gate fails if any
+appears there. Module resolution is not yet implemented, and the planned resolver will be added to
+the gate's forbidden set when it lands. The user-facing callback API (`Callback::from_fn`,
+`from_fn_with`) is safe: representation erasure is confined to the runtime's VTable machinery, and
+host callback bodies cannot be forced to contain `unsafe`.
 
 ---
 
 ## 5. Panic Safety & Sandbox Invariants
 
-1. **Panics Do Not Escape**: A panic originating from Lua bytecode compilation or execution is caught at the `Lua::try_enter` boundary and converted to an error result.
-2. **State Consistency**: If a panic occurs, the arena remains in a well-defined state or aborts the specific execution context without corrupting surrounding host memory.
-3. **No Catch-All Ignorance**: Internal invariant violations (`unreachable!()`) indicate runtime compiler bugs and are treated as P0 security defects.
+**Panic containment is a host responsibility.** Phodopus installs no `catch_unwind` boundary at
+`Lua::enter`, `Lua::try_enter`, `Lua::finish`, or `Lua::execute`; `try_enter` only maps the
+runtime's typed `Error<'gc>` to a GC-free `ExternError` (`lua.rs:289-294`). This is a deliberate,
+normative decision:
+
+1. **Arena soundness.** The VM runs inside `gc_arena::Arena::mutate`, which is not panic-safe: a
+   panic unwinding through an in-progress mutation can leave the arena's collection phase or a
+   `RefLock` borrow in an inconsistent state. Catching such a panic and continuing to use the same
+   `Lua` instance would be unsound, so the runtime must not claim to do so.
+2. **Unwinding is observable, not swallowed.** A Rust panic raised by the VM or by a host callback
+   unwinds across the runtime API. The host contains it at its own task, thread, or process
+   boundary (for example, a plugin worker that owns the `Lua` instance).
+3. **Internal panics are invariant guards.** The `panic!`/`unreachable!` sites in the executor,
+   thread, compiler, and meta-operation modules document states that cannot be reached by valid
+   Lua bytecode; they fire only on a compiler or VM bug. They are treated as P0 security defects,
+   never as recoverable errors.
+
+Host-visible behavior is pinned by `crates/phodopus/tests/panic_containment.rs`:
+
+- A Lua `error(...)` is delivered as a typed `Err`, never a panic.
+- A panicking host callback propagates an unwind to the host's `catch_unwind`, proving the host is
+  the component that contains it.
+
+There is intentionally no `catch_unwind` in any runtime source (`rg -n 'catch_unwind'
+crates/phodopus/src crates/phodopus-util/src` returns no matches); the only occurrence in the
+repository is in `tests/panic_containment.rs`, which supplies the host-side `catch_unwind` used to
+demonstrate that the runtime does not swallow the unwind.

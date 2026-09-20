@@ -17,6 +17,7 @@ The Security topic tree defines the normative security baselines, isolation guar
 
 ## Documents
 
-| Document | Type | Status | Scope |
-| :--- | :--- | :--- | :--- |
-| [Threat Model & Trust Boundaries](threat-model.md) | Policy | Accepted | Defensive boundaries: what Phodopus defends against, what is out-of-scope, host callback trust, and panic handling. |
+| Document                                           | Type      | Status   | Scope                                                                                                                    |
+| :------------------------------------------------- | :-------- | :------- | :----------------------------------------------------------------------------------------------------------------------- |
+| [Threat Model & Trust Boundaries](threat-model.md) | Policy    | Accepted | Defensive boundaries: what Phodopus defends against, what is out-of-scope, host callback trust, and panic handling.      |
+| [Unsafe Code Ledger](unsafe-ledger.md)             | Reference | Accepted | Exact inventory of every `unsafe` site, its soundness invariant, owning module, exercising test, and the enforcing gate. |

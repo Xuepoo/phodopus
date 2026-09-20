@@ -166,6 +166,11 @@ impl<'gc, M> Any<'gc, M> {
         Root<'gc, R>: Sized,
     {
         if TypeId::of::<R>() == self.0.type_id {
+            // SAFETY: The runtime `type_id` check guarantees the stored value is exactly
+            // `Value<M, Root<'gc, R>>`. `Value<M, V>` is `#[repr(C)]` with `AnyInner<M>` as its
+            // first field, matching the `AnyInner<M>` pointer we start from. `Gc` is invariant in
+            // `'gc`, so the projected `'gc` is the same lifetime the value was stored with, and the
+            // module-level safety argument above rules out cross-`Rootable` projection confusion.
             let ptr = unsafe { Gc::cast::<Value<M, Root<'gc, R>>>(self.0) };
             Some(&ptr.as_ref().value)
         } else {

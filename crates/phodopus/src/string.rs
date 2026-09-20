@@ -50,6 +50,10 @@ impl<'gc> String<'gc> {
         impl Drop for Owned {
             fn drop(&mut self) {
                 match self.header.buffer {
+                    // SAFETY: `Buffer::Indirect` is only ever constructed in `from_buffer` from
+                    // `Box::into_raw(s)`, so `ptr` is a live `Box<[u8]>` allocation that was not
+                    // freed elsewhere and is restored to a `Box` exactly once here. The length is
+                    // the original allocation length, so the deallocation accounting is exact.
                     Buffer::Indirect(ptr) => unsafe {
                         self.metrics.mark_external_deallocation(ptr.len());
                         drop(Box::from_raw(ptr as *mut [u8]));
@@ -229,10 +233,18 @@ struct InternedDynStringsInner<'gc>(
 #[collect(no_drop)]
 struct InternedDynStrings<'gc>(Gc<'gc, InternedDynStringsInner<'gc>>);
 
+// SAFETY: The manual `Collect` impl unlocks the `RefLock` without a guard during tracing (where
+// the arena guarantees exclusive access) and only upgrades/erases weak pointers; it adopts no new
+// `Gc` values, so manual tracing preserves gc-arena's reachability invariant.
 unsafe impl<'gc> Collect for InternedDynStringsInner<'gc> {
     fn trace(&self, cc: &Collection) {
-        // SAFETY: No new Gc pointers are adopted or reparented.
+        // SAFETY: Tracing happens with exclusive access to the arena (no Lua or host code
+        // runs concurrently), so unlocking the `RefLock` without the usual guard cannot
+        // alias another borrow. No `Gc` pointers are adopted here, and every weak pointer
+        // is either upgraded (keeping its target alive) or erased from the table.
         let mut dyn_strings = unsafe { self.0.unlock_unchecked() }.borrow_mut();
+        // SAFETY: Erasing an element never drops the iterator's `RawTable`; erasing the
+        // bucket currently yielded by the iterator is explicitly permitted.
         unsafe {
             for bucket in dyn_strings.iter() {
                 let s = bucket.as_ref().0;
@@ -256,10 +268,13 @@ impl<'gc> InternedDynStrings<'gc> {
     }
 
     fn intern(self, mc: &Mutation<'gc>, s: &[u8]) -> String<'gc> {
-        // SAFETY: If a new string is added, we call the write barrier.
+        // SAFETY: Interning only runs from inside arena mutation (`&Mutation`), where exclusive
+        // access is guaranteed, so the unchecked unlock cannot alias a live lock guard. The write
+        // barrier is invoked below before the table is mutated.
         let mut dyn_strings = unsafe { self.0.0.unlock_unchecked() }.borrow_mut();
 
-        // SAFETY: The RawTable outlives the iterator
+        // SAFETY: `dyn_strings` is borrowed for the duration of this call, so the `RawTable`
+        // outlives the iterator; erasing the bucket currently yielded is permitted.
         unsafe {
             for bucket in dyn_strings.iter_hash(str_hash(s)) {
                 let (key, _) = *bucket.as_ref();
@@ -318,7 +333,9 @@ impl<'gc> InternedStaticStrings<'gc> {
     fn intern(self, mc: &Mutation<'gc>, s: &'static [u8]) -> String<'gc> {
         let key = Static(s as *const _);
 
-        // SAFETY: If a new string is added, we call the write barrier.
+        // SAFETY: Interning only runs from inside arena mutation, where exclusive access is
+        // guaranteed, so the unchecked unlock cannot alias a live lock guard. The write barrier is
+        // invoked below before the table is mutated.
         let mut static_strings = unsafe { self.0.unlock_unchecked() }.borrow_mut();
 
         match static_strings.entry(key) {
@@ -387,6 +404,29 @@ mod tests {
             assert_eq!(test4.as_bytes(), b"test 4444 4444 4444 4444");
             assert_eq!(test5.as_bytes(), b"test 55555 55555 55555 55555 55555");
             assert_eq!(test6.as_bytes(), b"test 666666");
+        });
+    }
+
+    /// Each inline capacity the `from_slice` macro selects must round-trip exactly at its
+    /// boundary; this guards the pointer-offset computation in `String::as_bytes`.
+    #[test]
+    fn test_string_inline_capacity_boundaries() {
+        const INLINE_SIZES: [usize; 14] = [0, 2, 4, 8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256];
+
+        rootless_mutate(|mc| {
+            for size in INLINE_SIZES {
+                let exact = vec![b'x'; size];
+                assert_eq!(String::from_slice(mc, &exact).as_bytes(), exact.as_slice());
+
+                let just_over = vec![b'y'; size + 1];
+                assert_eq!(
+                    String::from_slice(mc, &just_over).as_bytes(),
+                    just_over.as_slice()
+                );
+            }
+
+            let huge = vec![b'z'; 4096];
+            assert_eq!(String::from_slice(mc, &huge).as_bytes(), huge.as_slice());
         });
     }
 }
