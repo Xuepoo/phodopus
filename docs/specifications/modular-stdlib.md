@@ -23,6 +23,7 @@ sidebar_order: 22
 - Modular standard library loading: libraries can be loaded selectively to minimize footprint and attack surface.
 - String formatting (`string.format`) specification and supported conversions.
 - Authentic Lua pattern matching (`find`, `match`, `gsub`, `gmatch`) behavior.
+- String metatable and object-oriented method call syntax (`s:sub()`, `s:upper()`, `s:format()`).
 - Standard Lua `utf8` library implementation.
 - Separation of standard UTF-8 code points from terminal typography (monospace column width).
 
@@ -132,6 +133,18 @@ The `utf8` module is implemented in `crates/phodopus/src/stdlib/utf8.rs` and loa
 
 **Architectural Invariant**: The standard `utf8` library measures **code points**, not terminal visual cell width. Grapheme clusters, emoji modifiers, and East Asian double-width characters (`unicode-width`, `unicode-segmentation`) belong strictly to the higher-level terminal host ABI (`bitty.text`), preserving strict Lua conformance in Phodopus.
 
+### 4.4 String Metatable and OOP Method Ergonomics
+
+Standard Lua (5.3/5.4) provides object-oriented method call ergonomics on string values (e.g. `s:sub(1, 3)`, `s:upper()`, `s:find("pat")`, `s:format(...)`). In standard Lua semantics, all string instances share a global metatable whose `__index` field defaults to the standard `string` library table.
+
+Phodopus implements string metatable and method dispatch via:
+
+1. **Dedicated VM State Field**: `State<'gc>` maintains a `string_metatable: Table<'gc>` initialized during state construction (`State::new`). The metatable is exposed on `Context<'gc>` through `ctx.string_metatable()`.
+2. **Standard Library Wiring**: When `load_string(ctx)` executes, `ctx.string_metatable()` is configured to map `MetaMethod::Index` (`__index`) to the loaded `string` module table (`ctx.string_metatable().set(ctx, MetaMethod::Index, string)`).
+3. **VM `__index` Dispatch**: In `meta_ops::index`, when evaluating an index operation on a `Value::String(_)`, the VM queries `ctx.string_metatable()` for `MetaMethod::Index`. If nil (such as in an unmapped minimal VM without string library support), indexing produces a standard `could not index into a string value` error. If present, the lookup resolves either via table indexing (e.g. `string.sub`) or by invoking an index metamethod callback with `[string_value, key]`.
+4. **Custom Extensibility**: User scripts or host extensions adding functions to `string` (e.g. `string.custom_fn = ...`) immediately become available via method call syntax (`s:custom_fn(...)`) on all string instances.
+5. **Chaining and Stack Hygiene**: Chained method invocations (`s:sub(...):upper():format(...)`) execute with clean register isolation and zero frame leaks across calls.
+
 ---
 
 ## 5. Security & Verification Plan
@@ -139,3 +152,4 @@ The `utf8` module is implemented in `crates/phodopus/src/stdlib/utf8.rs` and loa
 1. **Format Bomb Test**: `string.format("%999999999s", "a")` must return a descriptive error, not allocate gigabytes of whitespace.
 2. **Pattern Conformance**: Run the full PUC-Rio Lua 5.4 string pattern test suite against Phodopus; assert 100% equivalence.
 3. **Malformed UTF-8 Handling**: Assert `utf8.len` returns `nil` and the byte offset of invalid byte sequences without panicking.
+4. **String Method Invocation & Metatable Sandboxing**: Assert that string method calls (`s:len()`, `s:sub()`, `s:upper()`, `s:format()`, `s:find()`) correctly dispatch through the string metatable, custom extension functions on `string` propagate to method calls, direct indexing on strings behaves as expected, and missing methods error gracefully.

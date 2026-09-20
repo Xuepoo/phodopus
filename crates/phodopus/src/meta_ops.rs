@@ -219,6 +219,16 @@ pub fn index<'gc>(
 
             idx
         }
+        Value::String(_) => {
+            let idx = ctx.string_metatable().get_value(ctx, MetaMethod::Index);
+            if idx.is_nil() {
+                return Err(MetaOperatorError::Unary(
+                    MetaMethod::Index,
+                    table.type_name(),
+                ));
+            }
+            idx
+        }
         _ => {
             return Err(MetaOperatorError::Unary(
                 MetaMethod::Index,

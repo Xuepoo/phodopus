@@ -106,6 +106,7 @@ likely not be implemented due to differences between piccolo and PUC-Lua.
 | 🔵   | `sub(s, i[, j])`                  |             |       |
 | ⚫️️   | `unpack(fmt, s[, pos])`           |             |       |
 | 🔵   | `upper(s)`                        |             |       |
+| 🔵   | String metatable (`__index`)      |             | String metatable `__index` bound to `string` table, enabling OOP method syntax (`s:method(...)`) |
 
 ## UTF8
 
@@ -240,3 +241,4 @@ implemented nor are there plans to implement due to differences between the impl
 | 🔵     | Stack frame isolation | None | Registers from previous frames are zero-cost nil-filled via `resize(base + stack_size, Value::Nil)`. |
 | 🔵     | Tail calls (`return f(...)`) | None | Constant stack space tail calls supported; registers normalized on tail call push. |
 | 🔵     | Vararg alignment (`...`) | None | Correctly rotated via `rotate_right(var_params)`. When $N \le F$, `select('#', ...)` evaluates to 0. |
+| 🔵     | String method call syntax (`s:method(...)`) | None | String metatable `__index` dispatch via VM `meta_ops::index`. Absorbs upstream Piccolo PR #134 & PR #58. |
