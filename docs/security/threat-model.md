@@ -98,8 +98,8 @@ Audited `unsafe` is confined to the following categories:
    (`async_callback.rs`).
 
 `unsafe` is **forbidden** in standard library and compiler trees; the ledger gate fails if any
-appears there. Module resolution is not yet implemented, and the planned resolver will be added to
-the gate's forbidden set when it lands. The user-facing callback API (`Callback::from_fn`,
+appears there. The module resolver now exists in `crates/phodopus/src/stdlib/` and is already covered
+by the gate's forbidden-tree rule (`scripts/check-unsafe-ledger.sh:107-120`). The user-facing callback API (`Callback::from_fn`,
 `from_fn_with`) is safe: representation erasure is confined to the runtime's VTable machinery, and
 host callback bodies cannot be forced to contain `unsafe`.
 

@@ -14,7 +14,7 @@ sidebar_order: 12
 > Status: **accepted**. This document is the single implementation truth for
 > phase status across the repository. Every other document — root and crate
 > READMEs, the architecture overview, and integration records — reconciles to
-> the statuses recorded here. Phases 0, 1, and 1.5 are complete; Phases 2–5 are
+> the statuses recorded here. Phases 0, 1, 1.5, and 2 are complete; Phases 3–5 are
 > open. Completion of a phase records absorbed, tested source, not production
 > sandbox readiness.
 
@@ -42,7 +42,7 @@ sidebar_order: 12
                                |
                                v
 +-----------------------------------------------------------------+
-| Phase 2: Sandboxed Module System (`require`)                    |
+| Phase 2: Sandboxed Module System (`require`)        [COMPLETED] |
 | - Pluggable searcher chain, preloaded modules, VFS abstraction   |
 +-----------------------------------------------------------------+
                                |
@@ -109,11 +109,11 @@ Absorbed upstream community PR #91 with sandbox-first security hardening:
   - Bounded piecewise chunk assembly to a 16 MiB ceiling and consumed Fuel proportional to chunk byte length.
   - Initialized global `_G` pointing directly to `ctx.globals()`.
 
-### Phase 2: Sandboxed Module System (`require`)
+### Phase 2: Sandboxed Module System (`require`) (Completed)
 
-- Define a pluggable searcher chain interface for `package.searchers`.
-- Support embedded preloaded modules (`package.preload`) for core built-ins.
-- Implement capability-constrained virtual filesystem (VFS) resolvers, preventing arbitrary traversal of the host OS filesystem.
+- [x] Define a pluggable searcher chain interface for `package.searchers`.
+- [x] Support embedded preloaded modules (`package.preload`) for core built-ins.
+- [x] Implement capability-constrained virtual filesystem (VFS) resolvers, preventing arbitrary traversal of the host OS filesystem.
 
 ### Phase 3: Hard Memory Quotas & Sandboxing Ceilings
 

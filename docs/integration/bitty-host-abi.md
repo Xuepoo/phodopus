@@ -11,7 +11,7 @@ sidebar_order: 41
 
 # Bitty Host ABI Boundary
 
-> Status: **accepted** for the dependency relationship and the host-boundary rules (Sections 6.1 through 6.6), which record decided owner direction and must not be weakened. Each point below is individually marked **Accepted** or **Open**; nothing here is presented as decided beyond what an accepted source records. Undecided surfaces are listed under [Open Points](#67-open-points-not-decided). Phodopus has completed Phases 1 and 1.5 of its roadmap but the capabilities this boundary depends on (module resolution, hard quotas, async bridge) remain open; this page records design-level boundaries, and the async and quota mechanisms it names are target state, not shipped behavior (see [Evolution Roadmap](../architecture/roadmap.md)).
+> Status: **accepted** for the dependency relationship and the host-boundary rules (Sections 6.1 through 6.6), which record decided owner direction and must not be weakened. Each point below is individually marked **Accepted** or **Open**; nothing here is presented as decided beyond what an accepted source records. Undecided surfaces are listed under [Open Points](#67-open-points-not-decided). Phodopus has completed Phases 1, 1.5, and 2 of its roadmap; module resolution (sandboxed `require`) is implemented (Phase 2 complete) in `crates/phodopus/src/stdlib/`, while the other capabilities this boundary depends on (hard quotas, async bridge) remain open. This page records design-level boundaries, and the async and quota mechanisms it names are target state, not shipped behavior (see [Evolution Roadmap](../architecture/roadmap.md)).
 
 ## Purpose and Scope
 

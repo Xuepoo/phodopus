@@ -6,7 +6,7 @@
 
 **Phodopus** is a pure-Rust, stackless Lua runtime designed for uncompromising sandboxing, deterministic execution, and predictable resource bounds.
 
-Originally forked from Catherine West's ([@kyren](https://github.com/kyren)) pioneering work on [Piccolo](https://github.com/kyren/piccolo), Phodopus preserves all original commit history and licensing while advancing the runtime toward a modular embedded engine. Development is pre-adoption: Phases 1 and 1.5 of the roadmap are complete, while the sandbox ceilings, module system, async bridge, and Bitty host ABI remain open (see [Roadmap & Evolution](#roadmap--evolution)). It is not yet a production sandbox and is not yet Bitty's active runtime. Project SemVer begins afresh at `0.1.0-alpha.1` towards `0.1.0`, anchored on the upstream Piccolo `0.3.3` lineage baseline.
+Originally forked from Catherine West's ([@kyren](https://github.com/kyren)) pioneering work on [Piccolo](https://github.com/kyren/piccolo), Phodopus preserves all original commit history and licensing while advancing the runtime toward a modular embedded engine. Development is pre-adoption: Phases 1, 1.5, and 2 of the roadmap are complete, while the sandbox ceilings, async bridge, and Bitty host ABI remain open (see [Roadmap & Evolution](#roadmap--evolution)). It is not yet a production sandbox and is not yet Bitty's active runtime. Project SemVer begins afresh at `0.1.0-alpha.1` towards `0.1.0`, anchored on the upstream Piccolo `0.3.3` lineage baseline.
 
 ---
 
@@ -22,16 +22,15 @@ _Phodopus_ is the biological genus of small, energetic dwarf hamsters. It harmon
 2. **Stackless & Preemptible VM**: Execution state is heap-allocated in the GC arena. Coroutines, callbacks, and tail calls trampoline through non-blocking `Sequence` steps without consuming native Rust stack frames.
 3. **Deterministic Fuel Metering**: Fine-grained instruction budgeting ("Fuel") allows pausing or terminating runaway execution loops.
 4. **Microsecond Cold Starts & Tiny Footprint**: Starts in ~35 µs with an initial heap footprint of only ~11 KB.
-5. **Lua 5.4 Language & Stdlib Subsets**: Core Lua 5.4 syntax, arithmetic/bitwise operators, closures, coroutines, and metatables; stdlib modules `base`, `coroutine`, `math`, `string` (`format`, Lua patterns, `pack`/`unpack`), `table`, `utf8`, and `debug.traceback`; sandboxed text-only `load` with `_G`. The `io` and `os` modules are intentionally absent from the sandboxed core; `print` is the only I/O-adjacent global and dynamic loading is opt-in.
+5. **Lua 5.4 Language & Stdlib Subsets**: Core Lua 5.4 syntax, arithmetic/bitwise operators, closures, coroutines, and metatables; stdlib modules `base`, `coroutine`, `math`, `string` (`format`, Lua patterns, `pack`/`unpack`), `table`, `utf8`, and `debug.traceback`; sandboxed text-only `load` with `_G`; and a sandboxed `require` with a pluggable searcher chain, preloaded core modules, an empty default `package.path`, and capability-constrained VFS roots. The `io` and `os` modules are intentionally absent from the sandboxed core; `print` is the only I/O-adjacent global and dynamic loading is opt-in.
 
 ---
 
 ## Target Architecture (Not Yet Implemented)
 
-1. **Sandboxed Module Resolution** (Phase 2): Capability-constrained VFS resolvers, pluggable searcher chains, and embedded preloaded modules for `require`.
-2. **Hard Memory Quotas** (Phase 3): Explicit maximum heap allocation limits enforced directly on the runtime allocator, returning errors or triggering GC before out-of-memory. Heap memory is currently measured via `Lua::total_memory` but is not refused against a quota.
-3. **Host-Agnostic Async Suspension** (Phase 4): Non-blocking host suspension descriptors (`HostOp::Pending`) decoupled from specific async runtimes (Tokio/smol/async-std). The core still carries the Piccolo NOOP waker.
-4. **Bitty Host ABI** (Phase 5): The `bitty-lua` consumer layer mounting terminal, panel, command, and filesystem surfaces on the generic runtime.
+1. **Hard Memory Quotas** (Phase 3): Explicit maximum heap allocation limits enforced directly on the runtime allocator, returning errors or triggering GC before out-of-memory. Heap memory is currently measured via `Lua::total_memory` but is not refused against a quota.
+2. **Host-Agnostic Async Suspension** (Phase 4): Non-blocking host suspension descriptors (`HostOp::Pending`) decoupled from specific async runtimes (Tokio/smol/async-std). The core still carries the Piccolo NOOP waker.
+3. **Bitty Host ABI** (Phase 5): The `bitty-lua` consumer layer mounting terminal, panel, command, and filesystem surfaces on the generic runtime.
 
 ---
 
@@ -54,7 +53,7 @@ The repository is structured as a standard multi-crate virtual workspace under `
   - PR #110: `utf8` standard library
   - PR #121: Backtraces and error location reporting
 - [x] **Phase 1.5: Sandboxed Dynamic Loading**: Text-only `load`, custom `_ENV` binding, piecewise iterator chunks with a 16 MiB assembly ceiling, and global `_G`.
-- [ ] **Phase 2: Sandboxed Module System**: Pluggable searcher chain for `require`, embedded preloaded modules, and capability-constrained VFS resolvers.
+- [x] **Phase 2: Sandboxed Module System**: Pluggable searcher chain for `require`, embedded preloaded modules, and capability-constrained VFS resolvers.
 - [ ] **Phase 3: Hard Quotas & Resource Accounting**: Explicit maximum heap memory limits and Fuel allocation policies directly on the `RuntimeBuilder`.
 - [ ] **Phase 4: Generic Async Bridge**: Clean suspension protocol for host-driven futures and coroutine wakeups without core runtime coupling.
 - [ ] **Phase 5: Bitty Host ABI**: Mount high-level terminal and plugin interfaces (`bitty-lua`) strictly on top as an unprivileged consumer.

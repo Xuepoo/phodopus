@@ -80,17 +80,17 @@ likely not be implemented due to differences between Phodopus and PUC-Lua.
 
 ## Package
 
-| Status | Function                             | Differences                                                                                     | Notes |
-| ------ | ------------------------------------ | ----------------------------------------------------------------------------------------------- | ----- |
-| ⚫️️   | (global) `require(modname)`          |                                                                                                 |       |
-| ⚫️️   | `config` (value)                     |                                                                                                 |       |
-| ❗     | `cpath` (value)                      |                                                                                                 |       |
-| ⚫️️   | `loaded` (value)                     |                                                                                                 |       |
-| ❗     | `loadlib(libname, funcname)`         |                                                                                                 |       |
-| ⚫️️   | `path` (value)                       |                                                                                                 |       |
-| ⚫️️   | `preload` (value)                    |                                                                                                 |       |
-| ⚫️️   | `searchers` (value)                  | This implementation will differ from PUC-Lua because Phodopus does not support C loaders |       |
-| ⚫️️   | `searchpath(name, path[, sep, rep])` |                                                                                                 |       |
+| Status | Function                             | Differences                                                                                                                                                                 | Notes                                                                                                                   |
+| ------ | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| 🔵     | (global) `require(modname)`          | Sandboxed searcher chain (preload, embedded, VFS, custom host) with no C loader and an empty default `package.path`; path-traversal attempts are rejected before any lookup. | Cache and circular-dependency sentinel follow Lua 5.4 (`package.loaded`). Errors list every searcher candidate checked. |
+| ⚫️️   | `config` (value)                     |                                                                                                                                                                             |                                                                                                                         |
+| ❗     | `cpath` (value)                      |                                                                                                                                                                             | No C loader by design; the field is omitted.                                                                            |
+| 🔵     | `loaded` (value)                     |                                                                                                                                                                             | Module cache with Lua 5.4 sentinel-`true` circular-dependency semantics.                                                |
+| ❗     | `loadlib(libname, funcname)`         |                                                                                                                                                                             | Native code loading is rejected by the sandbox-first model.                                                             |
+| 🔵     | `path` (value)                       |                                                                                                                                                                             | Always the empty string; VFS roots replace host path templates.                                                         |
+| 🔵     | `preload` (value)                    |                                                                                                                                                                             | Seeded with the loaded core stdlib tables (`string`, `table`, `math`, `coroutine`, `utf8`, `debug`).                    |
+| 🔵     | `searchers` (value)                  | This implementation will differ from PUC-Lua because Phodopus does not support C loaders                                                                                    | Ordered preload -> embedded -> VFS -> custom host; extensible via `register_searcher*`.                                 |
+| ⚫️️   | `searchpath(name, path[, sep, rep])` |                                                                                                                                                                             |                                                                                                                         |
 
 ## String
 

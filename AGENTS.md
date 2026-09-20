@@ -27,10 +27,13 @@
 - Phase 1.5 (COMPLETE): Sandboxed text-only `load` (PR #91), custom `_ENV`
   binding, piecewise iterator chunks with a 16 MiB assembly ceiling, and global
   `_G`.
-- Phases 2–5 (OPEN): sandboxed module system (`require`), hard memory quotas and
-  Fuel policies, host-agnostic async bridge (`HostOp::Pending`), and Bitty host
-  ABI integration. `docs/architecture/roadmap.md` is the single implementation
-  truth for phase status.
+- Phase 2 (COMPLETE): Sandboxed module system (`require`) — pluggable searcher
+  chain, preloaded core modules, an empty default `package.path`, and
+  capability-constrained VFS roots.
+- Phases 3–5 (OPEN): hard memory quotas and Fuel policies, host-agnostic async
+  bridge (`HostOp::Pending`), and Bitty host ABI integration.
+  `docs/architecture/roadmap.md` is the single implementation truth for phase
+  status.
 - Do not introduce Bitty-specific abstractions or hardcoded async runtime
   assumptions into the VM core.
 
