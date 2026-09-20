@@ -9,6 +9,7 @@ pub mod error;
 pub mod finalizers;
 pub mod fuel;
 pub mod function;
+pub mod hostop;
 pub mod io;
 pub mod lua;
 pub mod memory;
@@ -34,6 +35,9 @@ pub use self::{
     error::{Error, ExternError, RuntimeError, TypeError},
     fuel::{Fuel, FuelExhausted},
     function::Function,
+    hostop::{
+        HostOpCancelled, HostOpGuard, HostOpHandle, HostOpRegistry, HostOpResult, HostOpValue,
+    },
     lua::{Context, Lua, LuaBuilder, RuntimeBuilder},
     memory::{MemoryLimit, OutOfMemory},
     meta_ops::MetaMethod,
@@ -45,7 +49,7 @@ pub use self::{
     },
     string::String,
     table::{Table, TableError},
-    thread::{Execution, Executor, ExecutorMode, Thread, ThreadMode},
+    thread::{Execution, Executor, ExecutorMode, HostOpError, Thread, ThreadMode},
     userdata::UserData,
     value::Value,
 };

@@ -1,12 +1,13 @@
 use std::hash::{Hash, Hasher};
 
 use allocator_api2::vec;
-use gc_arena::{Collect, Gc, Mutation, allocator_api::MetricsAlloc, lock::RefLock};
+use gc_arena::{Collect, Gc, Mutation, Rootable, allocator_api::MetricsAlloc, lock::RefLock};
 use thiserror::Error;
 
 use crate::{
-    CallbackReturn, Context, Error, FromMultiValue, Fuel, Function, IntoMultiValue, RuntimeError,
-    SequencePoll, Stack, String, Thread, ThreadMode, Variadic,
+    CallbackReturn, Context, Error, FromMultiValue, Fuel, Function, HostOpCancelled, HostOpHandle,
+    HostOpRegistry, HostOpResult, IntoMultiValue, RuntimeError, SequencePoll, Stack, String,
+    Thread, ThreadMode, Variadic,
     compiler::{FunctionRef, LineNumber},
     thread::BadThreadMode,
 };
@@ -28,6 +29,12 @@ pub enum ExecutorMode {
     Normal,
     /// The main thread has yielded and is waiting on being resumed.
     Suspended,
+    /// The main thread is parked on a host-driven async operation
+    /// ([`HostOpHandle`](crate::HostOpHandle)) and is waiting on `Executor::resume_host_op` or
+    /// `Executor::cancel_host_op`. Like `Suspended`, no step progress can be made; unlike a plain
+    /// yield, resumption carries host return values (or a cancellation error) back into the
+    /// parked sequence. See `docs/specifications/async-trampoline.md`.
+    HostSuspended,
     /// The `Executor` is currently inside its own `Executor::step` function.
     Running,
 }
@@ -37,6 +44,22 @@ pub enum ExecutorMode {
 pub struct BadExecutorMode {
     pub found: ExecutorMode,
     pub expected: ExecutorMode,
+}
+
+/// Error from `Executor::resume_host_op` / `Executor::cancel_host_op`.
+///
+/// `Mode` means the executor is not parked on a host operation (expected
+/// [`ExecutorMode::HostSuspended`]); `Unknown` means `handle` names no live parked operation
+/// (already resolved, never registered, or its thread died); `Busy` means the executor is
+/// currently inside its own `step` and cannot be resolved reentrantly.
+#[derive(Debug, Clone, Copy, Error)]
+pub enum HostOpError {
+    #[error(transparent)]
+    Mode(#[from] BadExecutorMode),
+    #[error("unknown host operation: {0}")]
+    Unknown(crate::HostOpHandle),
+    #[error("executor is running and cannot resolve a host operation reentrantly")]
+    Busy,
 }
 
 #[derive(Debug, Collect)]
@@ -133,6 +156,17 @@ impl<'gc> Executor<'gc> {
             if state.thread_stack.len() > 1 {
                 ExecutorMode::Normal
             } else {
+                // A parked host operation reports `HostSuspended` (not plain `Suspended`) so the
+                // host trampoline can tell "waiting on an external future" apart from "yielded to
+                // Lua" and route resumption through `resume_host_op` / `cancel_host_op`.
+                if state.thread_stack[0]
+                    .into_inner()
+                    .try_borrow()
+                    .map(|s| s.suspended_host_op().is_some())
+                    .unwrap_or(false)
+                {
+                    return ExecutorMode::HostSuspended;
+                }
                 match state.thread_stack[0].mode() {
                     ThreadMode::Stopped => ExecutorMode::Stopped,
                     ThreadMode::Result => ExecutorMode::Result,
@@ -377,6 +411,25 @@ impl<'gc> Executor<'gc> {
                                     bottom,
                                     sequence,
                                     pending_error: None,
+                                });
+                            }
+                            Ok(SequencePoll::Suspend(handle)) => {
+                                // Host-async suspension through the existing Sequence machinery:
+                                // the parked sequence moves into a `HostSuspended` marker on top
+                                // of the stack (native frames are not unwound). Fuel for this
+                                // transition was already charged as a sequence step above; while
+                                // parked the thread reports `Suspended`, so `step` yields
+                                // immediately and burns no further fuel until the host resolves
+                                // the op via `resume_host_op` / `cancel_host_op`.
+                                //
+                                // Register before yielding so a host that resolves synchronously
+                                // still finds the entry.
+                                ctx.singleton::<Rootable![HostOpRegistry<'_>]>()
+                                    .register(&ctx, handle, top_thread);
+                                top_state.frames.push(Frame::HostSuspended {
+                                    bottom,
+                                    sequence,
+                                    handle,
                                 });
                             }
                             Ok(SequencePoll::Return) => {
@@ -632,6 +685,171 @@ impl<'gc> Executor<'gc> {
                 expected: ExecutorMode::Suspended,
             })
         }
+    }
+
+    /// The pending host operation, if the main thread is parked on one.
+    ///
+    /// Returns the [`HostOpHandle`] when `mode() == ExecutorMode::HostSuspended`; `None`
+    /// otherwise. The host trampoline calls this after `step` yields to learn which external
+    /// future the parked sequence is waiting on.
+    pub fn pending_host_op(self, _ctx: Context<'gc>) -> Option<HostOpHandle> {
+        let state = self.0.try_borrow().ok()?;
+        if state.thread_stack.len() != 1 {
+            return None;
+        }
+        let inner = state.thread_stack[0].into_inner();
+        inner.try_borrow().ok()?.suspended_host_op()
+    }
+
+    /// Resolve a parked host operation with success values and make the thread runnable.
+    ///
+    /// Pops the `HostSuspended` marker, re-pushes the parked sequence with the host return values
+    /// placed on the stack starting at the suspension bottom, and removes the registry entry.
+    /// Execution continues at the next instruction on the following `step`; the resume path
+    /// re-enters the executor-loop quota chokepoint, so fuel/quota accounting is preserved (a
+    /// suspended coroutine consumes no fuel while parked — only the suspending sequence step and
+    /// the resuming steps are charged).
+    ///
+    /// GC isolation: `result` carries only primitives or [`StashedValue`](crate::StashedValue)
+    /// roots; the values are fetched inside the arena here, never held by the external future.
+    ///
+    /// # Errors
+    ///
+    /// Returns `BadExecutorMode` (expected `HostSuspended`) if the executor is not parked, or
+    /// `BadHostOp` if `handle` names no live parked operation (already resolved, unknown, or its
+    /// thread died).
+    pub fn resume_host_op(
+        self,
+        ctx: Context<'gc>,
+        handle: HostOpHandle,
+        result: HostOpResult,
+    ) -> Result<(), HostOpError> {
+        if self.mode() != ExecutorMode::HostSuspended {
+            return Err(HostOpError::Mode(BadExecutorMode {
+                found: self.mode(),
+                expected: ExecutorMode::HostSuspended,
+            }));
+        }
+        // Find the parked thread in the executor stack (single-threaded executors park the main
+        // thread; stacked executors park whichever thread holds the marker).
+        let parked = {
+            let state = self.0.try_borrow().map_err(|_| HostOpError::Busy)?;
+            state
+                .thread_stack
+                .iter()
+                .copied()
+                .find(|t| {
+                    (*t).into_inner()
+                        .try_borrow()
+                        .map(|s| s.suspended_host_op() == Some(handle))
+                        .unwrap_or(false)
+                })
+                .ok_or(HostOpError::Unknown(handle))?
+        };
+        {
+            let inner = parked.into_inner();
+            let mut tstate = inner.borrow_mut(&ctx);
+            let (bottom, sequence, found) = match tstate.frames.pop() {
+                Some(Frame::HostSuspended {
+                    bottom,
+                    sequence,
+                    handle: h,
+                }) if h == handle => (bottom, sequence, h),
+                other => {
+                    if let Some(frame) = other {
+                        tstate.frames.push(frame);
+                    }
+                    return Err(HostOpError::Unknown(handle));
+                }
+            };
+            let _ = found;
+            // Place host return values starting at the suspension bottom, exactly as a resumed
+            // sequence expects: the next `poll` sees the values on the stack.
+            tstate.stack.truncate(bottom);
+            let roots = ctx.registry().roots();
+            let mut fetched = Vec::new();
+            result.fetch_into(roots, &mut fetched);
+            tstate.stack.extend(fetched);
+            tstate.frames.push(Frame::Sequence {
+                bottom,
+                sequence,
+                pending_error: None,
+            });
+        }
+        ctx.singleton::<Rootable![HostOpRegistry<'_>]>()
+            .remove(&ctx, handle);
+        Ok(())
+    }
+
+    /// Cancel a parked host operation with a catchable error.
+    ///
+    /// Pops the `HostSuspended` marker and pushes the parked sequence back with a pending
+    /// cancellation error, so the sequence's `Sequence::error` runs on the next `step` and the
+    /// [`HostOpCancelled`] payload unwinds through Lua `pcall` handlers normally. Removes the
+    /// registry entry. Like resume, the cancel path re-enters the quota chokepoint on the next
+    /// step.
+    ///
+    /// # Errors
+    ///
+    /// Returns `BadExecutorMode` (expected `HostSuspended`) if the executor is not parked, or
+    /// `BadHostOp` if `handle` names no live parked operation.
+    pub fn cancel_host_op(
+        self,
+        ctx: Context<'gc>,
+        handle: HostOpHandle,
+        msg: impl Into<std::string::String>,
+    ) -> Result<(), HostOpError> {
+        if self.mode() != ExecutorMode::HostSuspended {
+            return Err(HostOpError::Mode(BadExecutorMode {
+                found: self.mode(),
+                expected: ExecutorMode::HostSuspended,
+            }));
+        }
+        let parked = {
+            let state = self.0.try_borrow().map_err(|_| HostOpError::Busy)?;
+            state
+                .thread_stack
+                .iter()
+                .copied()
+                .find(|t| {
+                    (*t).into_inner()
+                        .try_borrow()
+                        .map(|s| s.suspended_host_op() == Some(handle))
+                        .unwrap_or(false)
+                })
+                .ok_or(HostOpError::Unknown(handle))?
+        };
+        {
+            let inner = parked.into_inner();
+            let mut tstate = inner.borrow_mut(&ctx);
+            let (bottom, sequence) = match tstate.frames.pop() {
+                Some(Frame::HostSuspended {
+                    bottom,
+                    sequence,
+                    handle: h,
+                }) if h == handle => (bottom, sequence),
+                other => {
+                    if let Some(frame) = other {
+                        tstate.frames.push(frame);
+                    }
+                    return Err(HostOpError::Unknown(handle));
+                }
+            };
+            tstate.stack.truncate(bottom);
+            tstate.frames.push(Frame::Sequence {
+                bottom,
+                sequence,
+                pending_error: Some(crate::Error::Runtime(crate::RuntimeError::new(
+                    HostOpCancelled {
+                        handle,
+                        message: msg.into(),
+                    },
+                ))),
+            });
+        }
+        ctx.singleton::<Rootable![HostOpRegistry<'_>]>()
+            .remove(&ctx, handle);
+        Ok(())
     }
 
     /// Reset this `Executor` entirely, leaving it with a stopped main thread. Equivalent to

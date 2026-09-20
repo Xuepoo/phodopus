@@ -20,7 +20,7 @@ pub(crate) use self::thread::backtrace;
 pub use self::{
     executor::{
         BadExecutorMode, CurrentThread, Execution, Executor, ExecutorInner, ExecutorMode,
-        UpperLuaFrame,
+        HostOpError, UpperLuaFrame,
     },
     thread::{BadThreadMode, OpenUpValue, Thread, ThreadInner, ThreadMode},
 };

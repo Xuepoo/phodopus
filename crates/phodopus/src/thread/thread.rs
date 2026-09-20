@@ -10,8 +10,8 @@ use gc_arena::{
 use thiserror::Error;
 
 use crate::{
-    BoxSequence, Callback, Closure, Context, Error, FromMultiValue, Fuel, Function, IntoMultiValue,
-    String, Table, UserData, Value,
+    BoxSequence, Callback, Closure, Context, Error, FromMultiValue, Fuel, Function, HostOpHandle,
+    IntoMultiValue, String, Table, UserData, Value,
     closure::{UpValue, UpValueState},
     compiler::LineNumber,
     error::BacktraceFrame,
@@ -308,6 +308,20 @@ pub(crate) enum Frame<'gc> {
         // of the stack.
         pending_error: Option<Error<'gc>>,
     },
+    /// A sequence parked on a host-driven async operation. Must be the top frame of the stack.
+    ///
+    /// Pushed by the executor when a [`Sequence`](crate::Sequence) returns
+    /// [`SequencePoll::Suspend`](crate::SequencePoll::Suspend): the parked `Sequence` is owned by
+    /// this marker (native frames are not unwound), and `handle` records which opaque
+    /// [`HostOpHandle`](crate::HostOpHandle) the host must resume or cancel. Resume pops the
+    /// marker and re-pushes the sequence with host return values (or a cancellation error);
+    /// cancel pops the marker and pushes an error frame. The handle is `Copy` numeric state, so
+    /// the marker needs no GC tracing beyond the sequence itself.
+    HostSuspended {
+        bottom: usize,
+        sequence: BoxSequence<'gc>,
+        handle: crate::HostOpHandle,
+    },
     /// A suspended function call that has not yet been run. Must be the only frame in the stack.
     Start(Function<'gc>),
     /// A callback that has been queued but not called yet. Must be the top frame of the stack.
@@ -345,6 +359,7 @@ impl<'gc> ThreadState<'gc> {
                 Frame::Lua { .. } | Frame::Callback { .. } | Frame::Sequence { .. } => {
                     ThreadMode::Normal
                 }
+                Frame::HostSuspended { .. } => ThreadMode::Suspended,
                 Frame::Start(_) | Frame::Yielded => ThreadMode::Suspended,
                 Frame::WaitThread => ThreadMode::Waiting,
                 Frame::Result { .. } => ThreadMode::Result,
@@ -362,6 +377,18 @@ impl<'gc> ThreadState<'gc> {
     /// Borrow the frames of this thread.
     pub(crate) fn frames(&self) -> &[Frame<'gc>] {
         &self.frames
+    }
+
+    /// The pending host operation if this thread is parked on one.
+    ///
+    /// Returns the frame bottom, parked sequence bottom, and [`HostOpHandle`](crate::HostOpHandle)
+    /// when the top frame is `Frame::HostSuspended`; `None` otherwise. Used by the executor to
+    /// surface and resolve host suspensions.
+    pub(crate) fn suspended_host_op(&self) -> Option<HostOpHandle> {
+        match self.frames.last() {
+            Some(Frame::HostSuspended { handle, .. }) => Some(*handle),
+            _ => None,
+        }
     }
 
     /// Borrow the stack of this thread.
@@ -622,7 +649,7 @@ pub(crate) fn backtrace<'gc>(
                 Frame::Callback { .. } => {
                     trace_frames.push(BacktraceFrame::Callback { name: "anonymous" });
                 }
-                Frame::Sequence { .. } => {
+                Frame::Sequence { .. } | Frame::HostSuspended { .. } => {
                     trace_frames.push(BacktraceFrame::Sequence);
                 }
                 Frame::Start(_)

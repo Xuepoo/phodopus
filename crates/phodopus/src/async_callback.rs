@@ -12,8 +12,8 @@ use std::{
 use gc_arena::{Collect, DynamicRootSet, Mutation};
 
 use crate::{
-    BoxSequence, Context, Error, Execution, Function, Sequence, SequencePoll, Stack, StashedError,
-    StashedFunction, StashedThread, Thread,
+    BoxSequence, Context, Error, Execution, Function, HostOpHandle, Sequence, SequencePoll, Stack,
+    StashedError, StashedFunction, StashedThread, Thread,
     stash::{Fetchable, Stashable},
 };
 
@@ -178,6 +178,10 @@ impl AsyncSequence {
     /// In normal use, this will return control to the calling `Executor` and potentially the
     /// calling Rust code.
     ///
+    /// Unlike [`AsyncSequence::suspend`], the sequence stays runnable: the executor re-polls it
+    /// on the next step and keeps consuming [`Sequence`](crate::Sequence)-step fuel. Use
+    /// `suspend` for host-driven operations that must park without burning fuel.
+    ///
     /// This usually also allows garbage collection to take place, (depending on how the `Executor`
     /// is being driven).
     pub async fn pending(&mut self) {
@@ -250,6 +254,34 @@ impl AsyncSequence {
                 thread: thread.fetch(shared.roots),
                 bottom,
             });
+        });
+        wait_once().await;
+        self.shared.visit(move |shared| {
+            if let Some(err) = shared.error.take() {
+                Err(err.stash(&shared.ctx, shared.roots))
+            } else {
+                Ok(())
+            }
+        })
+    }
+
+    /// Suspend the sequence on a host-driven asynchronous operation.
+    ///
+    /// The callback registers its external future with the host bridge, receives an opaque
+    /// [`HostOpHandle`], and returns [`SequencePoll::Suspend`] through this method. The executor
+    /// parks the sequence's frame (native frames are not unwound) and yields control to the host
+    /// trampoline. When the external future resolves, the host resumes with
+    /// `Executor::resume_host_op`; on timeout or policy cancellation the host calls
+    /// `Executor::cancel_host_op`, which delivers the cancellation as a `StashedError` here
+    /// (unwindable through Lua `pcall`).
+    ///
+    /// GC isolation: only the opaque numeric handle crosses into host memory. No `Gc<'gc, T>` is
+    /// held by the external future; values transferred back on resume must be primitives or
+    /// [`Locals`]/registry stashed handles captured before suspension (see
+    /// `docs/specifications/async-trampoline.md` §4).
+    pub async fn suspend(&mut self, handle: HostOpHandle) -> Result<(), StashedError> {
+        self.shared.visit(move |shared| {
+            shared.set_next_op(SequenceOp::Suspend { handle });
         });
         wait_once().await;
         self.shared.visit(move |shared| {
@@ -391,6 +423,7 @@ where
             Poll::Pending => Ok(
                 match next_op.expect("`await` of a future other than `AsyncSequence` methods") {
                     SequenceOp::Pending => SequencePoll::Pending,
+                    SequenceOp::Suspend { handle } => SequencePoll::Suspend(handle),
                     SequenceOp::Call { function, bottom } => {
                         SequencePoll::Call { function, bottom }
                     }
@@ -432,6 +465,9 @@ where
 
 enum SequenceOp<'gc> {
     Pending,
+    Suspend {
+        handle: HostOpHandle,
+    },
     Call {
         function: Function<'gc>,
         bottom: usize,
