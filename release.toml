@@ -1,0 +1,54 @@
+# Phodopus release policy.
+#
+# Read by `cargo-release` as the workspace configuration
+# (`$WORKSPACE/release.toml`). It records the release identity, tag convention,
+# and packaging model so a release is reproducible and self-consistent.
+
+# --- Version identity -------------------------------------------------------
+#
+# The version line restarts at 0.0.1. Milestones are v0.1.0, v0.2.0, ...; the
+# working tree between milestones carries the next milestone's pre-release
+# version. `shared-version` keeps the workspace and every member crate on one
+# version so the Git tag, release title, and manifests always agree.
+#
+# Rationale: the v0.1.0 tag was published while the manifests still declared
+# the pre-release `0.1.0-alpha.1`, so tag and crate disagreed. A published tag
+# is immutable; alignment moves forward to the next milestone instead of
+# rewriting history.
+shared-version = true
+consolidate-commits = true
+allow-branch = ["main"]
+
+# --- Tag and release naming -------------------------------------------------
+#
+# Convention: tag `v<semver>` (for example `v0.2.0-alpha.1` or `v0.2.0`) and a
+# release title of `v<version> - <summary>`. The tag and the manifest version
+# must be byte-identical after the leading `v`.
+tag = true
+tag-name = "v{{version}}"
+tag-message = "Release {{version}}"
+
+# --- Packaging model (source-only) ------------------------------------------
+#
+# phodopus and phodopus-util set `publish = false` and are intentionally NOT
+# published to a registry. `gc-arena` is pinned to the revision
+# 5a7534b883b703f23cfb8c3cfdf033460aa77ea9, which is not published on
+# crates.io; the crates.io release that shares its version number (0.5.3,
+# 2024-05-15) predates the pin (2024-07-23) and is API-incompatible, so a
+# registry version requirement cannot describe a buildable package. The
+# distribution model is therefore "build from the tagged source tree":
+#
+#   cargo build --locked --release --workspace
+#
+# The release workflow verifies version identity, produces a source archive
+# from the tagged tree, and attaches it with checksums. Registry publishing is
+# disabled here and enforced by the crate manifests' `publish = false`.
+publish = false
+verify = false
+
+# Reproducible source archive is attached by the release workflow rather than
+# uploaded to a registry. Release verification (run by CI on every tag) is:
+#   - tag version == workspace version == every member crate version
+#   - `cargo build --locked --release --workspace` from the tagged tree
+#   - `cargo package --list --workspace --allow-dirty` (file-set manifest)
+#   - `cargo publish --dry-run` intentionally omitted: crates are non-publishable

@@ -1,34 +1,111 @@
+# Changelog
+
+All notable changes to Phodopus are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+Phodopus restarts the version line at `0.0.1`; the Piccolo entries inherited
+from the upstream fork are preserved verbatim under
+[Piccolo lineage (inherited)](#piccolo-lineage-inherited).
+
+## [Unreleased]
+
+### Changed
+
+- Aligned the workspace and both crate versions to `0.2.0-alpha.1`, the
+  pre-release of the `v0.2.0` milestone, so the Git tag, release title, and
+  manifest version are identical.
+- Marked `phodopus` and `phodopus-util` intentionally non-publishable
+  (`publish = false`) and documented the source-only distribution model,
+  because `gc-arena` is pinned to a revision that is not published on
+  crates.io.
+
+### Added
+
+- `release.toml`: release policy for version identity, the `v<version>` tag
+  convention, and source-package reproducibility verification.
+- `.github/workflows/release.yml`: verifies tag/manifest version identity,
+  builds from the tagged tree, and attaches a reproducible source archive plus
+  a package file manifest and checksums to the release.
+
+## [0.1.0] - 2026-09-20
+
+Development release (Phases 1 and 1.5). The Git tag was `v0.1.0` while the
+manifests declared the pre-release `0.1.0-alpha.1`; that mismatch is fixed from
+`0.2.0-alpha.1` onward. This section records the tagged content.
+
+### Added
+
+- `base`: sandboxed, strictly text-only `load` with isolated `_ENV` and a
+  global `_G`; precompiled bytecode injection is rejected.
+- `string`: `pack`, `unpack`, and `packsize` (Lua 5.3 binary packing) with
+  checked arithmetic and 16 MiB ceilings.
+- `string`: `rep` with checked arithmetic and a 16 MiB allocation ceiling.
+- `string`: method-call syntax via a `string` metatable
+  (`("hello"):upper()`).
+- `string`: native Lua pattern matching (`find`, `match`, `gsub`) and
+  `string.format`.
+- `utf8`: standard Lua 5.4 UTF-8 module.
+- `debug`: error backtraces via `debug.traceback`.
+
+### Fixed
+
+- `vm`: unprovided function parameters evaluate strictly to `nil`, matching
+  PUC-Rio Lua; documented the call-stack frame layout and invariance.
+
+### Documentation
+
+- Recorded the Bitty dependency relationship and `bitty-lua` host ABI boundary
+  under `docs/integration/`.
+
+## [0.0.1] - 2026-09-19
+
+Initial Phodopus runtime baseline.
+
+### Added
+
+- Multi-crate workspace layout under `crates/` (`phodopus`,
+  `phodopus-util`), preserving upstream history and dual MIT/CC0 licensing.
+- Modern dependency baseline (`rand 0.9`, `thiserror 2.0`, `anyhow 1.0`,
+  `serde 1.0`, `clap 4.6`) and MSRV 1.85 enforcement.
+- Cross-platform CI (Linux, macOS, Windows) and pinned Rust toolchain.
+
+## Piccolo lineage (inherited)
+
+The entries below are inherited verbatim from the upstream Piccolo project this
+runtime was forked from; they are not Phodopus releases.
+
 ## [0.3.3]
 
-* Bugfix to not reset live threads held in upvalues of dead threads.
+- Bugfix to not reset live threads held in upvalues of dead threads.
 
 ## [0.3.2]
 
-* Bugfix for tail-calling uncallable values. Fixes internal panics.
-* Major bugfix for finalization, make sure to transition the collector
+- Bugfix for tail-calling uncallable values. Fixes internal panics.
+- Major bugfix for finalization, make sure to transition the collector
   immediately to `Collecting` after finalization is done. Fixes lost `Thread`
   finalization and unclosed upvalues.
-* Make the `type` builtin match PUC-Rio Lua by @Jengamon.
-* Fix Lua stack corruption during tail calls with less arguments than expected.
-* Make function statements act like local / upvalue assignment when appropriate.
-* Fix `math.random` and `math.log` to better match PUC-Rio Lua by @Jengamon.
-* Fix `select` to better match PUC-Rio Lua by @Jengamon.
-* Implement `math.randomseed` by @Jengamon.
-* Let `__index` and `__newindex` chain through `UserData` in addition to
+- Make the `type` builtin match PUC-Rio Lua by @Jengamon.
+- Fix Lua stack corruption during tail calls with less arguments than expected.
+- Make function statements act like local / upvalue assignment when appropriate.
+- Fix `math.random` and `math.log` to better match PUC-Rio Lua by @Jengamon.
+- Fix `select` to better match PUC-Rio Lua by @Jengamon.
+- Implement `math.randomseed` by @Jengamon.
+- Let `__index` and `__newindex` chain through `UserData` in addition to
   `Table`.
-* Implement "dead keys" to make table iteration behavior match PUC-Rio Lua.
-* Implement `gc_arena::Collect` for `piccolo_util::UserDataMethods` and
+- Implement "dead keys" to make table iteration behavior match PUC-Rio Lua.
+- Implement `gc_arena::Collect` for `piccolo_util::UserDataMethods` and
   `piccolo_util::StaticUserDataMethods`.
-* Implement `string.sub`, `string.lower`, `string.upper`, `string.reverse` by
+- Implement `string.sub`, `string.lower`, `string.upper`, `string.reverse` by
   @Jengamon.
-* Better match PUC-Rio Lua behavior with longstring newlines.
+- Better match PUC-Rio Lua behavior with longstring newlines.
 
 ## [0.3.1]
 
 Small fixups from 0.3
 
-* Actually export `ExecutorInner`
-* Add a missing `#[doc(hidden)]` around an internal macro.
+- Actually export `ExecutorInner`
+- Add a missing `#[doc(hidden)]` around an internal macro.
 
 ## [0.3]
 
@@ -41,12 +118,12 @@ resuming" other coroutines and "tail yield".
 There is a new `piccolo-util` crate that adds support for some very common use
 cases that are not trivial to do in `piccolo` proper:
 
-* Serde support for convenient conversion between Rust types and Lua tables.
-* "Freeze" system to safely support the common case where you need to pass
+- Serde support for convenient conversion between Rust types and Lua tables.
+- "Freeze" system to safely support the common case where you need to pass
   a non-'static (and non-'gc) value into Lua. Not specific to piccolo, it is
   actually a general way of safely erasing a single lifetime parameter from a
   type (and replacing it with a runtime check).
-* Super quick and simple way to wrap Rust types into a Lua userdata with
+- Super quick and simple way to wrap Rust types into a Lua userdata with
   methods.
 
 `piccolo-util` will always be an **optional** dependency, and it may contain
@@ -58,48 +135,50 @@ always use it as a starting point for something better.
 Also includes a lot of quality of life API improvements, error message
 improvements, and more!
 
-* New `Executor` API that enables safe thread recursion and "tail resume" /
+- New `Executor` API that enables safe thread recursion and "tail resume" /
   "tail yield".
-* New `piccolo-util` crate with very commonly requested, useful features that
+- New `piccolo-util` crate with very commonly requested, useful features that
   are too opinionated or limited to belong in `piccolo` proper.
-* API changes to `Stack` to support a single, unified thread stack shared
+- API changes to `Stack` to support a single, unified thread stack shared
   between Lua and callbacks, similar to PUC-Rio Lua et al.
-* Upvalues no longer keep entire threads alive and instead use new gc-arena
+- Upvalues no longer keep entire threads alive and instead use new gc-arena
   finalization support to become closed when threads are garbage collected.
-* `IntoMultiValue` / `FromMultiValue` conversion for tuples now allows every
+- `IntoMultiValue` / `FromMultiValue` conversion for tuples now allows every
   element to be multi-converted rather than just the last element.
-* Support the `__eq` metamethod.
-* Error message improvements in lexer / parser errors (they now have line
+- Support the `__eq` metamethod.
+- Error message improvements in lexer / parser errors (they now have line
   numbers at least!).
-* API changes to second callback parameter, now an `Execution` type with `Fuel`
-  access *and* also calling thread information.
-* Add "chunk name" information to compiled chunks for future use in runtime
+- API changes to second callback parameter, now an `Execution` type with `Fuel`
+  access _and_ also calling thread information.
+- Add "chunk name" information to compiled chunks for future use in runtime
   errors / tracebacks.
-* Simplified `ctx` access, most methods are now directly implemented on `Context`.
-* Lots of type renames for clarity, `AnyCallback` -> `Callback`, `AnyUserData`
+- Simplified `ctx` access, most methods are now directly implemented on `Context`.
+- Lots of type renames for clarity, `AnyCallback` -> `Callback`, `AnyUserData`
   -> `UserData`, `AnyValue` -> `Any`, and others.
-* Add line number annotations to opcodes for future tracebacks.
-* Clean up general ptr handling and allow the user to access internal `Gc`
+- Add line number annotations to opcodes for future tracebacks.
+- Clean up general ptr handling and allow the user to access internal `Gc`
   pointers in all cases, allows for weak pointers to all pointer types.
 
 ## [0.2]
-* Allow `Thread` to be forcibly reset to a stopped state.
-* Improve the `Table` API, add functions that skip `IntoValue` conversion and
+
+- Allow `Thread` to be forcibly reset to a stopped state.
+- Improve the `Table` API, add functions that skip `IntoValue` conversion and
   simplify `Table::next`.
-* Support `__newindex`.
-* Auto conversion improvements, add a `Variadic` wrapper type to indicate
+- Support `__newindex`.
+- Auto conversion improvements, add a `Variadic` wrapper type to indicate
   variadic multi-values instead of bare arrays.
-* Add `Function::compose` and `Function::bind` for easier generic function
+- Add `Function::compose` and `Function::bind` for easier generic function
   handling from Rust.
-* Completely track used memory within interpreter instances. Tracks both
+- Completely track used memory within interpreter instances. Tracks both
   `gc-arena` allocated `Gc` pointers as well as all normal heap allocations
   using `gc-arena` external allocation tracking.
-* `Fuel` system to limit the execution time of Lua code.
-* Properly handle `...` in table constructors.
-* Implement `table.select('#')`, `table.pack`, and `table.unpack`.
-* Fix local function declarations to be visible in their own function body.
-* Guard against arbitrary recursion depth of callbacks (only ever a risk for
-  Threads calling callbacks on *other* Threads, aka Lua coroutines).
+- `Fuel` system to limit the execution time of Lua code.
+- Properly handle `...` in table constructors.
+- Implement `table.select('#')`, `table.pack`, and `table.unpack`.
+- Fix local function declarations to be visible in their own function body.
+- Guard against arbitrary recursion depth of callbacks (only ever a risk for
+  Threads calling callbacks on _other_ Threads, aka Lua coroutines).
 
 ## [0.1.1]
-* Initial crates.io release
+
+- Initial crates.io release

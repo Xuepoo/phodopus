@@ -1,0 +1,115 @@
+name: Release
+
+# Tag-driven release for the source-only distribution model (see release.toml).
+#
+# The workspace is intentionally non-publishable: gc-arena is pinned to a
+# revision that is not on crates.io, so there is no buildable registry package.
+# This workflow therefore ships the tagged source itself and verifies that the
+# tag and every manifest agree on one version before anything is published.
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version override (e.g. 0.2.0-alpha.1)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify version identity and package
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install pinned Rust toolchain
+        run: >-
+          rustup toolchain install 1.98.1
+          --profile minimal
+
+      - name: Resolve release version
+        id: version
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          set -euo pipefail
+          version="${INPUT_VERSION:-}"
+          if [[ "${GITHUB_REF:-}" == refs/tags/v* ]]; then
+            version="${GITHUB_REF#refs/tags/v}"
+          fi
+          if [[ -z "$version" ]]; then
+            version="$(cargo metadata --no-deps --format-version 1 \
+              | python3 -c 'import json,sys; print(json.load(sys.stdin)["packages"][0]["version"])')"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "release version: $version"
+
+      - name: Assert tag, workspace, and crate versions agree
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          workspace="$(cargo metadata --no-deps --format-version 1 \
+            | python3 -c 'import json,sys; p=json.load(sys.stdin)["packages"]; versions={x["version"] for x in p}; assert len(versions)==1, versions; print(versions.pop())')"
+          if [ "$workspace" != "$VERSION" ]; then
+            echo "::error::workspace version $workspace does not match release $VERSION"
+            exit 1
+          fi
+          echo "manifest versions all equal $VERSION"
+
+      - name: Build from the tagged tree
+        run: cargo build --locked --release --workspace
+
+      - name: Verify package file set and manifest
+        run: |
+          set -euo pipefail
+          cargo package --list --workspace --allow-dirty > /tmp/package-files.txt
+          echo "packaged file count: $(wc -l < /tmp/package-files.txt)"
+
+  release:
+    name: Publish source release
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Assemble source archive and checksums
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          archive="dist/phodopus-${VERSION}-source.tar.gz"
+          # Deterministic, tree-only archive of the tagged revision.
+          git archive --format=tar --prefix="phodopus-${VERSION}/" HEAD | gzip -n > "$archive"
+          sha256sum "$archive" | tee "$archive.sha256"
+          printf '{\n  "tag": "%s",\n  "version": "%s",\n  "commit": "%s"\n}\n' \
+            "${{ github.ref_name }}" "$VERSION" "${{ github.sha }}" > dist/provenance.json
+          cat dist/provenance.json
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: dist/*
+          generate_release_notes: true
+          prerelease: ${{ contains(needs.verify.outputs.version, '-') }}
+          draft: false
