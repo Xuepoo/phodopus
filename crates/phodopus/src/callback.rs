@@ -254,10 +254,23 @@ impl<'gc> Hash for Callback<'gc> {
 ///
 /// These actions mirror the same ones that one-shot callbacks can perform with `CallbackReturn`,
 /// see [`CallbackReturn`] for more information.
+///
+/// `Suspend` is the host-async suspension bridge (Phase 4,
+/// `docs/specifications/async-trampoline.md`): unlike [`SequencePoll::Pending`], which keeps the
+/// sequence runnable and re-polls it on the next step, `Suspend` parks the sequence and yields
+/// control to the host trampoline without consuming further fuel until the host resumes or
+/// cancels the operation.
 pub enum SequencePoll<'gc> {
     /// `Sequence` is pending, `Sequence::poll` will be called on the next step with the stack
     /// unchanged.
     Pending,
+    /// Suspend the running sequence on a host-driven asynchronous operation.
+    ///
+    /// The executor keeps the sequence's frame on the thread stack (no native frames are
+    /// unwound) and yields to the host with [`HostOpHandle`]. The sequence is not re-polled
+    /// until the host calls `Executor::resume_host_op` (success values) or
+    /// `Executor::cancel_host_op` (catchable error delivered via `Sequence::error`).
+    Suspend(crate::HostOpHandle),
     /// Call the given functions with the arguments in the stack starting at `bottom`. When the
     /// function returns, `Sequence::poll` will be called with the return values placed into the
     /// stack starting at `bottom`. If the given function errors, then `Sequence::error` will be
