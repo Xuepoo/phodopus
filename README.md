@@ -18,7 +18,7 @@ _Phodopus_ is the biological genus of small, energetic dwarf hamsters. It harmon
 
 ## Current Capabilities (Today)
 
-1. **Pure Rust Implementation**: Zero C dependencies and no `longjmp`; `gc-arena` provides generative lifetime-branded GC pointer safety. `unsafe` is confined to specific VM and `gc-arena` primitives, not eliminated; see the security ledger for the audited surface.
+1. **Pure Rust Implementation**: Zero C dependencies and no `longjmp`; `gc-arena` provides generative lifetime-branded GC pointer safety. `unsafe` is confined to specific VM and `gc-arena` primitives, not eliminated; see the [Unsafe Code Ledger](docs/security/unsafe-ledger.md) for the audited surface.
 2. **Stackless & Preemptible VM**: Execution state is heap-allocated in the GC arena. Coroutines, callbacks, and tail calls trampoline through non-blocking `Sequence` steps without consuming native Rust stack frames.
 3. **Deterministic Fuel Metering**: Fine-grained instruction budgeting ("Fuel") allows pausing or terminating runaway execution loops.
 4. **Microsecond Cold Starts & Tiny Footprint**: Starts in ~35 µs with an initial heap footprint of only ~11 KB.
