@@ -1,3 +1,11 @@
-# Clippy configuration for Phodopus
+# Clippy configuration for Phodopus.
+#
+# `msrv` mirrors `[workspace.package].rust-version` in Cargo.toml (MSRV 1.85).
+#
+# Lint-level policy (which lints are denied) is NOT expressible here; clippy.toml
+# only carries thresholds and targets. The enforced warning policy for this repo
+# lives in the `just clippy` recipe in the justfile: `-D warnings` plus a frozen,
+# shrink-only baseline allowlist. See the justfile header for the measured
+# baseline (CTX-0014 / review finding PHO-006).
 msrv = "1.85"
 cognitive-complexity-threshold = 25
