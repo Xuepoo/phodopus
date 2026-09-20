@@ -131,19 +131,24 @@ Quota enforcement happens at the boundaries Phodopus controls, each _before_ the
   fallible `try_reserve` path so a refused request returns a typed `OutOfMemory` instead of
   aborting;
 - `..` and `table.concat` charge the projected result size before allocating the result buffer;
-- large standard-library string buffers (for example `string.rep`) are pre-checked before
-  allocation;
+- every `Closure` opcode checks the `Gc`-boxed closure and its upvalue vector through
+  `Closure::try_from_parts` before the box is allocated, which refuses a retained closure chain;
+- large standard-library string buffers (for example `string.rep`, `string.format`, and
+  `string.gsub`) are pre-checked before allocation;
 - `Lua::execute`/`Lua::finish` check the arena between executor steps and run a full incremental
   collection when it is at or above the ceiling.
 
 The remaining limitation is documented rather than hidden: `gc-arena 0.5.3` does not route its
 internal `Gc`-box allocation through an application allocator, so a check cannot literally
 intercept every internal `Gc::new`. The runtime-boundary checks refuse the documented
-Denial-of-Service constructs (`{t}` constructor chains and unbounded `..` growth, rooted or not)
-and are recoverable (a `pcall` catches the refusal while recovery memory remains); the residual
-`Gc`-box and bookkeeping allocation is bounded at the GC boundary rather than refused individually.
-Moving the check into the internal allocator itself remains part of the Stage 4 compatibility-fork
-or upstream-PR work.
+Denial-of-Service constructs (`{t}` constructor chains, unbounded `..` growth, and retained
+closure chains) and are recoverable (a `pcall` catches the refusal while recovery memory remains);
+unrooted closure-per-iteration allocation is reclaimed at the GC boundary instead, since the
+intermediate closures are unreachable. What remains unchecked is allocation _inside_ an already
+charged operation (upvalue `Gc` boxes, interned-string nodes, `Gc` box headers), which is bounded
+by that charge plus the GC-boundary check rather than forming an unbounded chain. Moving the check
+into the internal allocator itself remains part of the Stage 4 compatibility-fork or upstream-PR
+work.
 
 ### Stage 3 & 4: Upstream Tracking or Compatibility Fork
 

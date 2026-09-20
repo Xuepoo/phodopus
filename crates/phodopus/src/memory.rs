@@ -17,14 +17,21 @@
 //!   reserve (`RawTable::try_reserve_array` / `try_reserve_map`);
 //! * `..` / `table.concat` result buffers, charged for the projected size before `Vec::with_capacity`
 //!   (`meta_ops::concat_many` / `concat_separated`);
-//! * large standard-library string buffers such as `string.rep` (`stdlib::string`).
+//! * every closure created by the `Closure` opcode, charged for its `Gc`-boxed `ClosureInner` and
+//!   upvalue vector before the box is allocated (`Closure::try_from_parts`), so a retained closure
+//!   chain is refused at the ceiling rather than at the execution boundary;
+//! * large standard-library string buffers such as `string.rep`, `string.format`, and `string.gsub`,
+//!   charged for the projected output before it is appended (`stdlib::string`).
 //!
 //! The check runs *before* the growth is attempted, so the documented quota paths cannot trigger a
 //! native abort, `handle_alloc_error`, or a partially-initialized value. It is not a literal
 //! interception of every internal `Gc::new`: `gc-arena 0.5.3` does not route `Gc`-box allocation
-//! through an application allocator, so the remaining `Gc`-box and bookkeeping allocations are
-//! bounded at the GC boundary (collected when the tracked total reaches the ceiling) rather than
-//! refused individually. See the scope note in `docs/specifications/sandbox-and-fuel.md` §4.2.
+//! through an application allocator, so allocations made *inside* a checked operation (for example
+//! the upvalue `Gc` boxes read by the `Closure` opcode, or the arena's own interned-string and
+//! bookkeeping nodes) are not each gated individually. They remain bounded because the operation
+//! that requests them is charged first and the next checked allocation or the GC-boundary check
+//! rejects once the tracked total reaches the ceiling. See the scope note in
+//! `docs/specifications/sandbox-and-fuel.md` §4.2.
 //!
 //! The ceiling is optional: [`MemoryLimit::new(None)`](MemoryLimit::new) means "unbounded", which
 //! preserves the historical measuring-only behavior.

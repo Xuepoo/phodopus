@@ -248,6 +248,136 @@ fn constructor_chain_refusal_never_aborts_under_pcall() {
     }
 }
 
+/// The "retained closure chain" clause: a loop that roots each successive closure must be refused
+/// by the hard quota with a typed `OutOfMemory`, not allowed to grow until the execution boundary.
+///
+/// This is the same bypass class as the `{t}` constructor chain: `Closure::from_parts` used to
+/// allocate the `Gc`-boxed closure with no `check_memory`, so a wrapper factory that captures the
+/// previous closure in a fresh upvalue kept every intermediate closure live and overshot the quota
+/// linearly (~6.4 MB at 50k iterations on a 1 MiB quota). The gated `Closure::try_from_parts` must
+/// stop it at ~1x quota.
+#[test]
+fn quota_refuses_retained_closure_chain() -> Result<(), ExternError> {
+    // A deliberately small quota: the closure chain crosses it after a handful of iterations.
+    const SMALL_QUOTA: usize = 1024 * 1024;
+    let mut lua = Lua::builder().memory_limit(SMALL_QUOTA).build();
+
+    let executor = start(
+        &mut lua,
+        r#"
+            -- Each `wrap` call captures its parameter in a fresh upvalue, so `root` transitively
+            -- retains every previous closure: a genuine chain that cannot be collected.
+            local function wrap(prev)
+                return function() return prev end
+            end
+            local root = nil
+            for i = 1, 500000 do
+                root = wrap(root)
+            end
+            _G.root = root
+            return "reached-end"
+        "#,
+    );
+
+    let caught = catch_unwind(AssertUnwindSafe(|| lua.execute::<String>(&executor)));
+    let result = caught.expect("quota refusal must not unwind the host thread");
+    let error = result.expect_err("the retained closure chain must be refused");
+    let oom = oom_from(&error).expect("failure must be a typed OutOfMemory");
+
+    assert_eq!(oom.limit, SMALL_QUOTA);
+    // Evidence that the refusal is a real hard bound at ~1x quota, not a boundary overshoot:
+    // `oom.current` is the arena's tracked total when the gated closure allocation was refused.
+    // It must have grown close to the quota, and must not have overshot it by more than a small
+    // tolerance (the residual unchecked internal allocation).
+    assert!(
+        oom.requested > SMALL_QUOTA,
+        "the refused closure request {} did not actually cross the quota",
+        oom.requested
+    );
+    assert!(
+        oom.current >= SMALL_QUOTA.saturating_sub(4096),
+        "closure chain was refused at {} bytes, far below the {SMALL_QUOTA} byte quota",
+        oom.current
+    );
+    assert!(
+        oom.current <= SMALL_QUOTA + 4096,
+        "tracked total {} at refusal exceeded the {SMALL_QUOTA} byte quota",
+        oom.current
+    );
+
+    // The runtime remains usable after the refusal.
+    let small = start(&mut lua, "local f = function() return 7 end; return f()");
+    assert_eq!(lua.execute::<i64>(&small)?, 7);
+    Ok(())
+}
+
+/// The closure-per-iteration allocation *without* retaining the result: each `wrap(nil)` call
+/// allocates a fresh closure (and its captured upvalue) that becomes garbage immediately. Unlike
+/// the retained chain, the GC-boundary collection reclaims it, so this completes while staying
+/// under the quota. This documents the honest distinction: only a chain that stays reachable can
+/// grow without bound, and that is the case the quota must refuse.
+#[test]
+fn unrooted_closure_allocations_are_gc_bounded() -> Result<(), ExternError> {
+    const SMALL_QUOTA: usize = 1024 * 1024;
+    let mut lua = Lua::builder().memory_limit(SMALL_QUOTA).build();
+
+    let executor = start(
+        &mut lua,
+        r#"
+            local function wrap(prev)
+                return function() return prev end
+            end
+            for i = 1, 500000 do
+                wrap(nil)
+            end
+            return "reached-end"
+        "#,
+    );
+
+    let result = lua.execute::<String>(&executor)?;
+    assert_eq!(result, "reached-end");
+    assert!(
+        lua.total_memory() <= SMALL_QUOTA,
+        "unrooted closures must be reclaimed at the GC boundary, total {} exceeded {SMALL_QUOTA}",
+        lua.total_memory()
+    );
+    Ok(())
+}
+
+/// The secondary overshoot path: a `string.format` output buffer larger than a small quota must be
+/// refused before it is built, not after the boundary observes the interned result.
+#[test]
+fn quota_refuses_large_format_output() -> Result<(), ExternError> {
+    const SMALL_QUOTA: usize = 1024 * 1024;
+    let mut lua = Lua::builder().memory_limit(SMALL_QUOTA).build();
+
+    let executor = start(
+        &mut lua,
+        r#"
+            local chunk = string.rep("x", 64 * 1024)
+            local fmt = string.rep("%s", 64)
+            return #string.format(fmt, chunk, chunk, chunk, chunk, chunk, chunk, chunk, chunk,
+                chunk, chunk, chunk, chunk, chunk, chunk, chunk, chunk, chunk, chunk, chunk, chunk,
+                chunk, chunk, chunk, chunk, chunk, chunk, chunk, chunk, chunk, chunk, chunk, chunk,
+                chunk, chunk, chunk, chunk, chunk, chunk, chunk, chunk, chunk, chunk, chunk, chunk,
+                chunk, chunk, chunk, chunk, chunk, chunk, chunk, chunk, chunk, chunk, chunk, chunk,
+                chunk, chunk, chunk, chunk, chunk, chunk, chunk, chunk)
+        "#,
+    );
+
+    let caught = catch_unwind(AssertUnwindSafe(|| lua.execute::<i64>(&executor)));
+    let result = caught.expect("quota refusal must not unwind the host thread");
+    let error = result.expect_err("a format buffer over the quota must be refused");
+    let oom = oom_from(&error).expect("failure must be a typed OutOfMemory");
+    assert_eq!(oom.limit, SMALL_QUOTA);
+    assert!(
+        lua.total_memory() <= SMALL_QUOTA + 64 * 1024,
+        "tracked total {} should stay bounded near the quota",
+        lua.total_memory()
+    );
+    Ok(())
+}
+
 /// The fallible host API (`Table::try_set_field` / `Context::try_set_global`) returns the typed
 /// refusal instead of panicking when a quota is installed and the write would grow a table.
 #[test]

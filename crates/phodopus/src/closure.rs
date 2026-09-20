@@ -1,11 +1,12 @@
 use std::hash::{Hash, Hasher};
+use std::mem::size_of;
 
 use allocator_api2::{SliceExt, boxed, vec};
 use gc_arena::{Collect, Gc, Mutation, allocator_api::MetricsAlloc, lock::Lock};
 use thiserror::Error;
 
 use crate::{
-    Constant, Context, String, Table, Value,
+    Constant, Context, OutOfMemory, String, Table, Value,
     compiler::{self, CompiledPrototype, FunctionRef, LineNumber},
     opcode::OpCode,
     thread::OpenUpValue,
@@ -197,6 +198,19 @@ pub struct ClosureInner<'gc> {
     upvalues: vec::Vec<UpValue<'gc>, MetricsAlloc<'gc>>,
 }
 
+/// Conservative byte charge for constructing a closure from `upvalue_count` upvalues.
+///
+/// Used by [`Closure::try_from_parts`] to charge a closure allocation to the hard quota *before*
+/// either the upvalue vector or the `Gc`-boxed `ClosureInner` is built. The estimate covers the
+/// `Gc` box (its `GcBoxHeader` plus the `ClosureInner` payload) and the upvalue vector's heap
+/// buffer. It intentionally does not model allocator size-class rounding; the next construction
+/// observes the true tracked total, so any rounding slack cannot accumulate.
+fn closure_allocation_bytes(upvalue_count: usize) -> usize {
+    let box_bytes = size_of::<ClosureInner<'static>>().saturating_add(size_of::<usize>());
+    let upvalue_bytes = upvalue_count.saturating_mul(size_of::<UpValue<'static>>());
+    box_bytes.saturating_add(upvalue_bytes)
+}
+
 /// A garbage collected pointer to an executable Lua function.
 ///
 /// A `Closure` represents a [`FunctionPrototype`] bound to an environment. A closure "closes over"
@@ -253,6 +267,30 @@ impl<'gc> Closure<'gc> {
         upvalues: vec::Vec<UpValue<'gc>, MetricsAlloc<'gc>>,
     ) -> Self {
         Self(Gc::new(mc, ClosureInner { proto, upvalues }))
+    }
+
+    /// Create a closure from an already-built prototype and upvalue vector, refusing cleanly when
+    /// the `Gc`-boxed closure would push the arena above the configured hard quota.
+    ///
+    /// This is the quota-checked constructor used by the `Closure` opcode. A retained closure chain
+    /// such as `local function wrap(p) return function() return p end end; root = wrap(root)`
+    /// captures each previous closure in a fresh upvalue, keeping the whole chain reachable, so
+    /// without this check it would grow until the execution boundary. The check runs *before* the
+    /// `Gc::new(ClosureInner)` box is allocated, so the chain is refused with a typed
+    /// [`OutOfMemory`] at the ceiling. With no quota configured the behavior is identical to
+    /// [`Closure::from_parts`].
+    ///
+    /// The two `Gc` boxes that make up a new upvalue (`UpValue` and its `Lock` state) are created
+    /// by the caller before this call via [`OpenUpValue`]/[`UpValue::new`]; they are captured by
+    /// the callers' own accounting and re-observed by the next check, so the estimate here covers
+    /// the closure box and its upvalue vector.
+    pub fn try_from_parts(
+        ctx: Context<'gc>,
+        proto: Gc<'gc, FunctionPrototype<'gc>>,
+        upvalues: vec::Vec<UpValue<'gc>, MetricsAlloc<'gc>>,
+    ) -> Result<Self, OutOfMemory> {
+        ctx.check_memory(closure_allocation_bytes(upvalues.len()))?;
+        Ok(Self::from_parts(&ctx, proto, upvalues))
     }
 
     pub fn from_inner(inner: Gc<'gc, ClosureInner<'gc>>) -> Self {

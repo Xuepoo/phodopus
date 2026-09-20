@@ -228,7 +228,7 @@ pub(super) fn run_vm<'gc>(
                     }
                 }
 
-                let closure = Closure::from_parts(&ctx, proto, upvalues);
+                let closure = Closure::try_from_parts(ctx, proto, upvalues)?;
                 registers.stack_frame[dest.0 as usize] =
                     Value::Function(Function::Closure(closure));
             }

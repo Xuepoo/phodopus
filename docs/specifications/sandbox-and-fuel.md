@@ -171,9 +171,11 @@ pub struct MemoryLimit {
    - A quota check runs immediately before the runtime allocates one of the quota-controlled
      collections: a Lua table constructor's initial array/map capacity (`{...}`, via
      `Table::try_new`), every later table array/map growth, a `..` / `table.concat` result buffer,
-     and large standard-library string buffers such as `string.rep`. It computes the byte request
-     with checked arithmetic and refuses if `current_bytes + requested > max_bytes` (see
-     `crates/phodopus/src/memory.rs`, `crates/phodopus/src/table/raw.rs`, and
+     a closure created by the `Closure` opcode (via `Closure::try_from_parts`), and large
+     standard-library string buffers such as `string.rep`, `string.format`, and `string.gsub`. It
+     computes the byte request with checked arithmetic and refuses if
+     `current_bytes + requested > max_bytes` (see `crates/phodopus/src/memory.rs`,
+     `crates/phodopus/src/table/raw.rs`, `crates/phodopus/src/closure.rs`, and
      `crates/phodopus/src/meta_ops.rs`).
    - When the arena reaches the ceiling at a GC boundary, a full incremental collection is run
      before execution continues, so garbage is reclaimed before the runtime gives up.
@@ -197,17 +199,27 @@ _before_ the allocation that would cross the ceiling:
   fallible reserve;
 - the `..` operator and `table.concat`, charged for the projected result size before the result
   buffer is allocated;
-- large standard-library string buffers such as `string.rep`.
+- every closure created by the `Closure` opcode, charged for its `Gc`-boxed `ClosureInner` and
+  upvalue vector before the box is allocated (`Closure::try_from_parts`), which is what refuses a
+  retained closure chain (`root = wrap(root)`, where `wrap` captures its argument) at the ceiling;
+- large standard-library string buffers such as `string.rep`, `string.format`, and `string.gsub`.
 
 The whole arena is additionally checked and collected at execution boundaries. Together these
-refuse the documented Denial-of-Service constructs with a recoverable typed `OutOfMemory`:
-the `{t}` constructor chain (`local t = {}; while true do t = {t} end`) and unbounded string growth
-(`s = s .. s`), both as the rooted form that keeps the chain live and as the form whose
-intermediate tables become garbage. What remains outside the per-allocation check is internal
-runtime bookkeeping and the `Gc` box headers themselves; those allocations are bounded by the
-GC-boundary check (the arena is collected once its tracked total reaches the ceiling) rather than
-refused individually, because `Gc::new` has no application-controlled failure channel in `0.5.3`.
-A future `gc-arena` upgrade or compatibility fork (see
+refuse the documented Denial-of-Service constructs with a recoverable typed `OutOfMemory`: the
+`{t}` constructor chain (`local t = {}; while true do t = {t} end`), unbounded string growth
+(`s = s .. s`), and a _retained_ closure chain (`root = wrap(root)`, where each `wrap` result keeps
+the previous closure reachable) that cannot be collected. The unrooted forms of the table and
+string constructs are refused as well; unrooted closure-per-iteration allocation is instead
+reclaimed at the GC boundary, since the intermediate closures are unreachable.
+
+What remains outside the per-allocation check is the allocation that happens _inside_ an already
+charged operation and the arena's internal bookkeeping. `gc-arena 0.5.3` does not route `Gc`-box
+allocation through an application allocator, so the upvalue `Gc` boxes read by the `Closure`
+opcode, interned-string nodes, and the `Gc` box headers themselves are not each refused
+individually: the requesting operation is charged before it runs, and the next checked allocation
+or the GC-boundary check rejects once the tracked total reaches the ceiling. The residual
+unchecked growth per step is therefore bounded by the size of those internal nodes rather than
+being an unbounded chain; a future `gc-arena` upgrade or compatibility fork (see
 [Garbage Collector Strategy](../architecture/gc-strategy.md)) may move the check into the internal
 allocator itself.
 
