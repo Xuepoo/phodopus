@@ -4,6 +4,13 @@
 - ❗= will not implement
 - 🤷‍♀️ = low importance
 
+This table records **current Phodopus behavior against PUC-Lua 5.4**. It is
+inherited from the upstream Piccolo project and is being reconciled with the
+Phodopus implementation; statuses describe this repository, not upstream
+Piccolo. "Implemented" does not imply sandbox-hardening, proportional Fuel
+accounting, or production readiness; see the [Evolution Roadmap](docs/architecture/roadmap.md)
+for phase status.
+
 "Implemented" means "near 1:1 PUC-Lua behavior"[^0].
 
 "Differing" means that there is an implementation, but it doesn't correspond to PUC-Lua behavior.
@@ -11,10 +18,10 @@
 "Unimplemented" means there is no implementation (when used, `nil` is found) _or_
 that calling the implementation with the corresponding arguments will error where in PUC-Lua it does not.
 
-"Will Not Implement" is for functions that will not be implemented due to a fundamental difference between piccolo and PUC-Lua.
+"Will Not Implement" is for functions that will not be implemented due to a fundamental difference between Phodopus's sandbox-first execution model and PUC-Lua.
 
 "Low Importance" is for things that, while technically implementable, will
-likely not be implemented due to differences between piccolo and PUC-Lua.
+likely not be implemented due to differences between Phodopus and PUC-Lua.
 
 **NOTE**: `(a[, b, c])` corresponds to the Lua docs' `(a[, b[, c]])` usage.
 
@@ -36,11 +43,11 @@ likely not be implemented due to differences between piccolo and PUC-Lua.
 | ⚫️    | `error(message, level)`                                        |                                                                                                                                        |       |
 | 🔵     | `_G` (value)                                                   |                                                                                                                                        | Pointing to global environment table                                                                                   |
 | 🔵     | `getmetatable(object)`                                         |                                                                                                                                        |                                                                                                                        |
-| 🟡     | `ipairs(t)`                                                    | PUC-Lua returns `iter, table, 0`, where as piccolo returns `iter, table`.                                                              |                                                                                                                        |
+| 🟡     | `ipairs(t)`                                                    | PUC-Lua returns `iter, table, 0`, whereas Phodopus returns `iter, table`.                                                              |                                                                                                                        |
 | 🔵     | `load(chunk[, chunkname, mode, env])`                          | Text-only compilation enforced for sandbox security; binary bytecode chunks (`mode = "b"` or binary signature) are rejected.           | Piecewise iterator protocol, fuel accounting, and 16 MiB assembly ceiling supported.                                   |
 | ⚫️    | `loadfile([filename, mode, env])`                              |                                                                                                                                        |       |
 | 🔵     | `next(table [, index])`                                        |                                                                                                                                        |       |
-| 🔵     | `pairs(t)`                                                     | By default, PUC-Lua return `iter, table, nil` where as piccolo returns `iter, table`.                                                  |       |
+| 🔵     | `pairs(t)`                                                     | By default, PUC-Lua returns `iter, table, nil`, whereas Phodopus returns `iter, table`.                                                  |       |
 | 🔵     | `pcall(f, args...)`                                            |                                                                                                                                        |       |
 | 🔵     | `print(args...)`                                               |                                                                                                                                        |       |
 | ⚫️    | `rawequal(v1, v2)`                                             |                                                                                                                                        |       |
@@ -50,7 +57,7 @@ likely not be implemented due to differences between piccolo and PUC-Lua.
 | 🔵     | `select(index, args...)`                                       |                                                                                                                                        |       |
 | 🔵     | `setmetatable(table, metatable)`                               |                                                                                                                                        |       |
 | 🔵    | `tonumber(e[, base])`                                          |                                                                                                                                        |       |
-| 🟡     | `tostring(v)`                                                  | piccolo does not use the metatable field `__name` by default, while PUC-Lua does.                                                      |       |
+| 🟡     | `tostring(v)`                                                  | Phodopus does not use the metatable field `__name` by default, while PUC-Lua does.                                                      |       |
 | 🔵     | `type(v)`                                                      |                                                                                                                                        |       |
 | 🔵    | `_VERSION` (value)                                             |                                                                                                                                        |       |
 | ⚫️    | `warn(msg, args...)`                                           |                                                                                                                                        |       |
@@ -82,7 +89,7 @@ likely not be implemented due to differences between piccolo and PUC-Lua.
 | ❗     | `loadlib(libname, funcname)`         |                                                                                                 |       |
 | ⚫️️   | `path` (value)                       |                                                                                                 |       |
 | ⚫️️   | `preload` (value)                    |                                                                                                 |       |
-| ⚫️️   | `searchers` (value)                  | This implementation will _definitely_ differ from PUC-Lua as piccolo does not support C loaders |       |
+| ⚫️️   | `searchers` (value)                  | This implementation will differ from PUC-Lua because Phodopus does not support C loaders |       |
 | ⚫️️   | `searchpath(name, path[, sep, rep])` |                                                                                                 |       |
 
 ## String
@@ -167,7 +174,10 @@ I'm not going over these with a fine-tooth comb, if it exists (and takes the spe
 
 ## I/O
 
-I see a module in the code repo that is labelled the IO library, but it only creates the `print` global, which is not the IO module (as understood from the Lua Manual).
+Phodopus intentionally omits the `io` module from its sandboxed core. The
+`print` global exists as an opt-in host affordance, not as the `io` library;
+file and stream APIs are absent so untrusted scripts have no ambient filesystem
+access.
 
 | Status | Function                      | Differences                                                                                                                 | Notes |
 | ------ | ----------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ----- |
@@ -176,8 +186,8 @@ I see a module in the code repo that is labelled the IO library, but it only cre
 | ⚫️    | `input([file])`               |                                                                                                                             |       |
 | ⚫️    | `lines([filename, args...])`  |                                                                                                                             |       |
 | ⚫️    | `open(filename [, mode])`     |                                                                                                                             |       |
-|        | `output([file])`              |                                                                                                                             |       |
-| ⚫️/❗ | `popen(prog[, mode])`         | Might be classifiable as "C weirdness" or it's just creating another process which kinda feels as icky as the OS module imo |       |
+| ⚫️    | `output([file])`              |                                                                                                                             |       |
+| ⚫️/❗ | `popen(prog[, mode])`         | Spawns an external process, which conflicts with the no-ambient-authority sandbox; not implemented. |       |
 | ⚫️    | `read(args...)`               |                                                                                                                             |       |
 | ⚫️    | `tmpfile()`                   |                                                                                                                             |       |
 | ⚫️    | `type(obj)`                   |                                                                                                                             |       |
@@ -192,26 +202,32 @@ I see a module in the code repo that is labelled the IO library, but it only cre
 
 ## OS
 
-IMO this module is best in its current state, but I cannot stop one from downloading the individual pixels of Henry Cavill's side profile, so...
+Phodopus intentionally omits the `os` module from its sandboxed core: process,
+clock, environment, and filesystem operations are ambient authority that
+untrusted scripts must not receive. Hosts that need such capabilities expose
+them as explicit, capability-gated host services.
 
 | Status | Function                        | Differences                                                                                                                                                                                | Notes |
 | ------ | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----- |
 | ⚫️    | `clock()`                       |                                                                                                                                                                                            |       |
 | ⚫️    | `date([format, time])`          |                                                                                                                                                                                            |       |
 | ⚫️    | `difftime(t2, t1)`              |                                                                                                                                                                                            |       |
-| ❗     | `execute([command])`            | Because PUC-Lua requires this to be isomorphic to ISO C `system`, I can simply put this under C weirdness!                                                                                 |       |
-| ⚫️    | `exit([code, close])`           | Probably a❗, but I cannae tell you want to do                                                                                                                                             |       |
-| ⚫️    | `getenv(varname)`               | ...what is this a shell script?                                                                                                                                                            |       |
+| ❗     | `execute([command])`            | Spawning a host process is ambient authority and is not implemented in the sandboxed core.                                                                                                 |       |
+| ⚫️    | `exit([code, close])`           |                                                                                                                                                                                            |       |
+| ⚫️    | `getenv(varname)`               | Environment access is ambient authority and is not implemented in the sandboxed core.                                                                                                      |       |
 | ⚫️    | `remove(filename)`              |                                                                                                                                                                                            |       |
 | ⚫️    | `rename(oldname, newname)`      |                                                                                                                                                                                            |       |
-| ❗     | `setlocale(locale[, category])` | This is _explictly_ not going to be implemented according to the README, along with its C weirdness brethren, I just have problems with the rest of this module. _Personnel_ problems \\s. |       |
+| ❗     | `setlocale(locale[, category])` | Host locale mutation is out of scope for a sandboxed runtime.                                                                                                                              |       |
 | ⚫️    | `time([table])`                 |                                                                                                                                                                                            |       |
 | ⚫️    | `tmpname()`                     |                                                                                                                                                                                            |       |
 
 ## Debug
 
-As stated on the repository main page, this library for the most part is not
-implemented nor are there plans to implement due to differences between the implementations. This sections is mostly so that people might get an idea of what _is_ implemented, and what is theoretically _possible_ to implement.
+Phodopus implements `debug.traceback` only. The remaining `debug` library is
+largely unimplemented: several functions depend on C-style hooks, exact stack
+introspection, or registry internals that the stackless VM deliberately does not
+expose. This section records what is implemented and what is theoretically
+possible.
 
 | Status | Function                                  | Implementation Notes / Differences                                                                                                                                                                        | Notes |
 | ------ | ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----- |

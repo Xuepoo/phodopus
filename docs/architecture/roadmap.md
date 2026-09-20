@@ -11,7 +11,12 @@ sidebar_order: 12
 
 # Phodopus Evolution Roadmap
 
-> Status: **accepted**. This document defines the sequential delivery phases for Phodopus, ordering dependencies from foundational fork stabilization through production deployment.
+> Status: **accepted**. This document is the single implementation truth for
+> phase status across the repository. Every other document — root and crate
+> READMEs, the architecture overview, and integration records — reconciles to
+> the statuses recorded here. Phases 0, 1, and 1.5 are complete; Phases 2–5 are
+> open. Completion of a phase records absorbed, tested source, not production
+> sandbox readiness.
 
 ---
 

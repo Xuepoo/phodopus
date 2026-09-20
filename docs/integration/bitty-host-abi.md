@@ -11,7 +11,7 @@ sidebar_order: 41
 
 # Bitty Host ABI Boundary
 
-> Status: **accepted** for the dependency relationship and the host-boundary rules (Sections 6.1 through 6.6), which record decided owner direction and must not be weakened. Each point below is individually marked **Accepted** or **Open**; nothing here is presented as decided beyond what an accepted source records. Undecided surfaces are listed under [Open Points](#67-open-points-not-decided). Phodopus remains pre-implementation: this page records design-level boundaries, not shipped behavior.
+> Status: **accepted** for the dependency relationship and the host-boundary rules (Sections 6.1 through 6.6), which record decided owner direction and must not be weakened. Each point below is individually marked **Accepted** or **Open**; nothing here is presented as decided beyond what an accepted source records. Undecided surfaces are listed under [Open Points](#67-open-points-not-decided). Phodopus has completed Phases 1 and 1.5 of its roadmap but the capabilities this boundary depends on (module resolution, hard quotas, async bridge) remain open; this page records design-level boundaries, and the async and quota mechanisms it names are target state, not shipped behavior (see [Evolution Roadmap](../architecture/roadmap.md)).
 
 ## Purpose and Scope
 
@@ -83,7 +83,7 @@ The accepted [Async Trampoline Specification](../specifications/async-trampoline
 
 ### 6.3 Asynchronous Crossing: The `HostOp::Pending(handle)` Trampoline (Accepted)
 
-**Accepted.** Asynchronous host operations cross the boundary as the typed `HostOp::Pending(handle)` suspension descriptor, and the crossing is directional:
+**Accepted** as the target boundary contract. Asynchronous host operations will cross the boundary as the typed `HostOp::Pending(handle)` suspension descriptor, and the crossing is directional. The protocol is not yet implemented in the runtime core (Phase 4 target state); the current core retains the Piccolo NOOP waker:
 
 - The **VM core** yields the typed pending handle and parks the Lua coroutine in the GC heap without unwinding native stack frames.
 - The **host adapter** — owned by the host, not the core — receives the handle, drives the corresponding future on the host scheduler, and resumes the suspended coroutine with the result or a cancellation error.
@@ -132,15 +132,15 @@ None of these is a global open question in this repository's registers; each is 
 
 ## Security Review
 
-| Concern                            | Required control                                                                                               | Source                                                                                            |
-| :--------------------------------- | :------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------ |
-| Runtime-core host coupling         | No Bitty abstraction and no hard async-runtime dependency in the core; `bitty-lua` is the only Bitty consumer. | This document (Accepted); [Async Trampoline Specification](../specifications/async-trampoline.md) |
-| Ambient host access                | `require` reaches host paths only through capability-rooted resolvers; unadmitted paths fail closed.           | [Module Resolver Specification](../specifications/module-resolver.md)                             |
-| Resource exhaustion                | Hard memory quotas and instruction Fuel bound untrusted scripts; no unbounded execution or allocation.         | [Sandbox & Fuel Specification](../specifications/sandbox-and-fuel.md)                             |
-| Async re-entrancy and stalls       | Pending handles are bounded and cancellable by host policy; the VM core never blocks on a foreign waker.       | [Async Trampoline Specification](../specifications/async-trampoline.md)                           |
-| Semantic substitution              | Lua patterns are implemented natively; mapping to Rust `regex` is rejected to avoid silent behavior change.    | [Modular Standard Library Specification](../specifications/modular-stdlib.md) Section 4.2         |
-| Unicode/typography conflation      | `utf8.*` stays code-point based; terminal width and graphemes stay terminal-side.                              | [Modular Standard Library Specification](../specifications/modular-stdlib.md) Section 4.3         |
-| Contract creep across the boundary | This page adds no capability, weakens no accepted control, and promotes no open point to a decision.           | This document (Accepted)                                                                          |
+| Concern                            | Required control                                                                                                                                                                     | Source                                                                                            |
+| :--------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------ |
+| Runtime-core host coupling         | No Bitty abstraction and no hard async-runtime dependency in the core; `bitty-lua` is the only Bitty consumer.                                                                       | This document (Accepted); [Async Trampoline Specification](../specifications/async-trampoline.md) |
+| Ambient host access                | `require` reaches host paths only through capability-rooted resolvers; unadmitted paths fail closed.                                                                                 | [Module Resolver Specification](../specifications/module-resolver.md)                             |
+| Resource exhaustion                | **Target state**: hard memory quotas and instruction Fuel must bound untrusted scripts with no unbounded execution or allocation. Fuel is implemented; allocator quotas are Phase 3. | [Sandbox & Fuel Specification](../specifications/sandbox-and-fuel.md)                             |
+| Async re-entrancy and stalls       | Pending handles are bounded and cancellable by host policy; the VM core never blocks on a foreign waker.                                                                             | [Async Trampoline Specification](../specifications/async-trampoline.md)                           |
+| Semantic substitution              | Lua patterns are implemented natively; mapping to Rust `regex` is rejected to avoid silent behavior change.                                                                          | [Modular Standard Library Specification](../specifications/modular-stdlib.md) Section 4.2         |
+| Unicode/typography conflation      | `utf8.*` stays code-point based; terminal width and graphemes stay terminal-side.                                                                                                    | [Modular Standard Library Specification](../specifications/modular-stdlib.md) Section 4.3         |
+| Contract creep across the boundary | This page adds no capability, weakens no accepted control, and promotes no open point to a decision.                                                                                 | This document (Accepted)                                                                          |
 
 This section restates boundaries owned by accepted specifications and introduces no new control. Any integration mechanism that would weaken an accepted security control is out of scope until the owning contract changes.
 
@@ -181,9 +181,9 @@ Implementation evidence for the mapped capabilities belongs to the owning specif
 
 These are the Bitty-side records of the same direction. They are consumer records: this repository does not restate their content, and they do not override the runtime specifications above.
 
-- `bitty-docs` governance decision: [ADR-0012 — Phodopus Runtime as the Lua Successor Path](https://github.com/bitty-terminal/bitty-docs/blob/main/docs/decisions/adrs/ADR-0012-phodopus-runtime.md).
-- `bitty-plugins-docs` plugin-side candidate: [Phodopus Plugin Runtime (Candidate)](https://github.com/bitty-terminal/bitty-plugins-docs/blob/main/runtime/phodopus-runtime-candidate.md).
-- `bitty-terminal-docs` terminal-side candidate: [Phodopus Host ABI (Candidate)](https://github.com/bitty-terminal/bitty-terminal-docs/blob/main/specifications/phodopus-host-abi-candidate.md).
+- `bitty-docs` governance decision: [ADR-0012 — Phodopus Runtime as the Lua Successor Path](https://github.com/bitty-terminal/bitty-docs/blob/main/docs/decisions/adrs/ADR-0012-phodopus-runtime.md). This is the accepted source of the relationship and the deferral; it selects Phodopus as the successor direction without migrating code or changing pins.
+- `bitty-plugins-docs` runtime corpus: [Runtime contracts](https://github.com/bitty-terminal/bitty-plugins-docs/blob/main/runtime/README.md) — the accepted plugin-host runtime, Lua runtime, and isolation/resource contracts that the eventual plugin-side integration must satisfy.
+- `bitty-terminal-docs` terminal-side candidate: [Phodopus Host ABI (Candidate)](https://github.com/bitty-terminal/bitty-terminal-docs/blob/main/specifications/phodopus-host-abi-candidate.md) — a **draft** candidate (not accepted, not normative) recording terminal-side direction; it authorizes no shipped behavior and is not the authority for this boundary.
 
 ## Acceptance Criteria
 

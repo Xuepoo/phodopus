@@ -11,9 +11,9 @@
   All upstream commit history, copyright attributions, and dual MIT/CC0 licenses
   are strictly preserved. Upstream remote is tracked at
   `https://github.com/kyren/piccolo.git`.
-- Canonical planning and design records originate in the research corpus
-  (`research/summary/060.md`) and will bridge to `bitty-plugins-docs` and
-  `bitty-terminal-docs` as integrations mature.
+- Canonical planning and design records live in this repository's `docs/`
+  corpus, which bridges to `bitty-plugins-docs` and `bitty-terminal-docs` as
+  integrations mature.
 - Shared governance: decisions, security corpus, reviews, and project standards
   are defined in [`bitty-docs`](https://github.com/bitty-terminal/bitty-docs).
 
@@ -21,9 +21,16 @@
 
 - Phase 0: Baseline fork initialized, repo identity, CarryCtx configuration, and
   workspace integration established; quality gates passing cleanly.
-- Approaching Phase 1: Review and absorb mature upstream Piccolo community PRs
-  (#128 `string.format`, #129 Lua pattern matching, #110 `utf8`, #121 `traceback`
-  stack diagnostics).
+- Phase 1 (COMPLETE): Upstream PR absorption — `string.format` (#128), Lua
+  pattern matching (#129), `utf8` (#110), `debug.traceback` (#121), plus stack
+  frame safety coverage.
+- Phase 1.5 (COMPLETE): Sandboxed text-only `load` (PR #91), custom `_ENV`
+  binding, piecewise iterator chunks with a 16 MiB assembly ceiling, and global
+  `_G`.
+- Phases 2–5 (OPEN): sandboxed module system (`require`), hard memory quotas and
+  Fuel policies, host-agnostic async bridge (`HostOp::Pending`), and Bitty host
+  ABI integration. `docs/architecture/roadmap.md` is the single implementation
+  truth for phase status.
 - Do not introduce Bitty-specific abstractions or hardcoded async runtime
   assumptions into the VM core.
 
@@ -96,11 +103,13 @@
 - **Strict Decoupling**: `Phodopus` is an independent, general-purpose,
   sandbox-first Lua runtime crate usable by any Rust application.
 - **No Direct Tokio in VM Core**: Core VM execution remains synchronous and
-  stackless. Asynchronous operations yield typed host suspension descriptors
-  (`HostOp::Pending(handle)`), allowing external host schedulers (such as Tokio
-  in Bitty) to drive futures and resume coroutines via a trampoline.
-- **Sandboxing & Fuel**: Execution must remain deterministic, preemptible by
-  instruction Fuel, and boundable by hard memory quotas.
+  stackless. The planned asynchronous bridge will yield typed host suspension
+  descriptors (`HostOp::Pending(handle)`), allowing external host schedulers
+  (such as Tokio in Bitty) to drive futures and resume coroutines via a
+  trampoline; this interface is Phase 4 target state and is not yet implemented.
+- **Sandboxing & Fuel**: Execution is deterministic and preemptible by
+  instruction Fuel today; bounding by hard memory quotas is Phase 3 target state
+  and is not yet implemented (memory is currently measured, not refused).
 - **Native Lua Patterns**: String pattern matching implements authentic Lua
   patterns (via PR #129 adaptation) rather than generic Rust regex syntax.
 - **No Hardcoded Values**: Never hardcode host/environment values: absolute

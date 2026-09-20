@@ -6,34 +6,32 @@
 
 **Phodopus** is a pure-Rust, stackless Lua runtime designed for uncompromising sandboxing, deterministic execution, and predictable resource bounds.
 
-Originally forked from Catherine West's ([@kyren](https://github.com/kyren)) pioneering work on [Piccolo](https://github.com/kyren/piccolo), Phodopus preserves all original commit history and licensing while advancing the runtime into a production-grade, modular embedded engine. Project SemVer begins afresh at `0.1.0-alpha.1` towards `0.1.0`, anchored on the upstream Piccolo `0.3.3` lineage baseline.
+Originally forked from Catherine West's ([@kyren](https://github.com/kyren)) pioneering work on [Piccolo](https://github.com/kyren/piccolo), Phodopus preserves all original commit history and licensing while advancing the runtime toward a modular embedded engine. Development is pre-adoption: Phases 1 and 1.5 of the roadmap are complete, while the sandbox ceilings, module system, async bridge, and Bitty host ABI remain open (see [Roadmap & Evolution](#roadmap--evolution)). It is not yet a production sandbox and is not yet Bitty's active runtime. Project SemVer begins afresh at `0.1.0-alpha.1` towards `0.1.0`, anchored on the upstream Piccolo `0.3.3` lineage baseline.
 
 ---
 
 ## Why "Phodopus"?
 
-*Phodopus* is the biological genus of small, energetic dwarf hamsters. It harmonizes with Bitty's hamster-themed ecosystem (**Bitty** terminal -> **Bittie** mascot -> **Wheel** agent harness -> **Phodopus** runtime engine) while remaining a fully independent, general-purpose Rust crate with no external host coupling.
+_Phodopus_ is the biological genus of small, energetic dwarf hamsters. It harmonizes with Bitty's hamster-themed ecosystem (**Bitty** terminal -> **Bittie** mascot -> **Wheel** agent harness -> **Phodopus** runtime engine) while remaining a fully independent, general-purpose Rust crate with no external host coupling.
 
 ---
 
 ## Current Capabilities (Today)
 
-1. **Pure Rust & Memory Safe**: Zero C dependencies, no `longjmp`, using `gc-arena` for generative lifetime-branded GC pointer safety.
+1. **Pure Rust Implementation**: Zero C dependencies and no `longjmp`; `gc-arena` provides generative lifetime-branded GC pointer safety. `unsafe` is confined to specific VM and `gc-arena` primitives, not eliminated; see the [Unsafe Code Ledger](docs/security/unsafe-ledger.md) for the audited surface.
 2. **Stackless & Preemptible VM**: Execution state is heap-allocated in the GC arena. Coroutines, callbacks, and tail calls trampoline through non-blocking `Sequence` steps without consuming native Rust stack frames.
 3. **Deterministic Fuel Metering**: Fine-grained instruction budgeting ("Fuel") allows pausing or terminating runaway execution loops.
 4. **Microsecond Cold Starts & Tiny Footprint**: Starts in ~35 µs with an initial heap footprint of only ~11 KB.
-5. **Baseline Lua 5.4 Subsets**: Supports core Lua 5.4 syntax, arithmetic/bitwise operators, closures, coroutines, metatables, and basic stdlib modules (`base`, `coroutine`, `math`, `string`, `table`, `io`).
+5. **Lua 5.4 Language & Stdlib Subsets**: Core Lua 5.4 syntax, arithmetic/bitwise operators, closures, coroutines, and metatables; stdlib modules `base`, `coroutine`, `math`, `string` (`format`, Lua patterns, `pack`/`unpack`), `table`, `utf8`, and `debug.traceback`; sandboxed text-only `load` with `_G`. The `io` and `os` modules are intentionally absent from the sandboxed core; `print` is the only I/O-adjacent global and dynamic loading is opt-in.
 
 ---
 
-## Target Architecture (In Development)
+## Target Architecture (Not Yet Implemented)
 
-1. **Hard Memory Quotas**: Explicit maximum heap allocation limits enforced directly on the runtime allocator, returning errors or triggering GC before out-of-memory.
-2. **Authentic Pattern Matching & Formatting**: Native Lua pattern matching engine (`find`, `match`, `gsub`) and robust `string.format` support (Phase 1).
-3. **UTF-8 Standard Library**: Standard Lua 5.4 `utf8` library module support.
-4. **Diagnostic Tracebacks**: Bytecode-mapped source locations and backtrace generation on error.
-5. **Sandboxed Module Resolution**: Capability-constrained VFS resolvers, pluggable searcher chains, and embedded preloaded modules for `require`.
-6. **Host-Agnostic Async Suspension**: Non-blocking host suspension descriptors (`HostOp::Pending`) decoupled from specific async runtimes (Tokio/smol/async-std).
+1. **Sandboxed Module Resolution** (Phase 2): Capability-constrained VFS resolvers, pluggable searcher chains, and embedded preloaded modules for `require`.
+2. **Hard Memory Quotas** (Phase 3): Explicit maximum heap allocation limits enforced directly on the runtime allocator, returning errors or triggering GC before out-of-memory. Heap memory is currently measured via `Lua::total_memory` but is not refused against a quota.
+3. **Host-Agnostic Async Suspension** (Phase 4): Non-blocking host suspension descriptors (`HostOp::Pending`) decoupled from specific async runtimes (Tokio/smol/async-std). The core still carries the Piccolo NOOP waker.
+4. **Bitty Host ABI** (Phase 5): The `bitty-lua` consumer layer mounting terminal, panel, command, and filesystem surfaces on the generic runtime.
 
 ---
 
@@ -50,11 +48,12 @@ The repository is structured as a standard multi-crate virtual workspace under `
 ## Roadmap & Evolution
 
 - [x] **Phase 0: Baseline & Lineage Preservation**: Fork Piccolo with complete Git history, MIT/CC0 attribution, upstream remote tracking, and verified green quality gates.
-- [ ] **Phase 1: Upstream PR Absorption**: Review and integrate mature community contributions:
+- [x] **Phase 1: Upstream PR Absorption**: Review and integrate mature community contributions:
   - PR #128: `string.format` implementation
   - PR #129: Authentic Lua pattern matching (`find`, `match`, `gsub`)
   - PR #110: `utf8` standard library
   - PR #121: Backtraces and error location reporting
+- [x] **Phase 1.5: Sandboxed Dynamic Loading**: Text-only `load`, custom `_ENV` binding, piecewise iterator chunks with a 16 MiB assembly ceiling, and global `_G`.
 - [ ] **Phase 2: Sandboxed Module System**: Pluggable searcher chain for `require`, embedded preloaded modules, and capability-constrained VFS resolvers.
 - [ ] **Phase 3: Hard Quotas & Resource Accounting**: Explicit maximum heap memory limits and Fuel allocation policies directly on the `RuntimeBuilder`.
 - [ ] **Phase 4: Generic Async Bridge**: Clean suspension protocol for host-driven futures and coroutine wakeups without core runtime coupling.
@@ -104,7 +103,7 @@ just test
 
 ## Lineage & Attribution
 
-Phodopus is built on the foundations of **Piccolo** (previously known as *Luster* and *Deimos*), conceived and authored by **Catherine West** ([@kyren](https://github.com/kyren)) and community contributors.
+Phodopus is built on the foundations of **Piccolo** (previously known as _Luster_ and _Deimos_), conceived and authored by **Catherine West** ([@kyren](https://github.com/kyren)) and community contributors.
 
 We honor the immense craftsmanship that went into Piccolo's stackless architecture and `gc-arena`. All original copyright notices, licenses, and commit histories remain in place.
 
