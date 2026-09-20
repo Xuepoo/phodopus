@@ -25,6 +25,7 @@ sidebar_order: 22
 - Authentic Lua pattern matching (`find`, `match`, `gsub`, `gmatch`) behavior.
 - String metatable and object-oriented method call syntax (`s:sub()`, `s:upper()`, `s:format()`).
 - Safe string repetition (`string.rep`) with memory sandbox ceilings.
+- Binary packing and unpacking (`string.pack`, `string.unpack`, `string.packsize`) with standard format specifiers, checked alignment, endianness, and memory sandbox limits.
 - Standard Lua `utf8` library implementation.
 - Separation of standard UTF-8 code points from terminal typography (monospace column width).
 
@@ -162,6 +163,33 @@ The `string.rep(s, n [, sep])` function generates a repeated string separated by
    - Total capacity calculation uses checked arithmetic (`checked_mul` and `checked_add`) across both `s` copies and `sep` delimiters.
    - Any arithmetic overflow or required capacity exceeding 16 MiB raises a standard Lua error (`"resulting string too large"`) rather than panicking or triggering out-of-memory crashes.
 
+### 4.6 Binary Packing and Unpacking (`string.pack`, `string.unpack`, `string.packsize`)
+
+Phodopus implements standard Lua 5.3 binary packing and unpacking according to specification §6.4.2:
+
+1. **Functions**:
+   - `string.pack(fmt, v1, v2, ...)`: Serializes values according to format string `fmt` and returns a binary byte string.
+   - `string.unpack(fmt, s [, pos])`: Deserializes values from binary string `s` starting at 1-based index `pos` (defaults to 1). Returns unpacked values followed by the 1-based index of the first unread byte. Supports negative indices counting backward from the end of `s`.
+   - `string.packsize(fmt)`: Computes the static byte size resulting from packing format `fmt`. Raises a Lua error if variable-length options (`s` or `z`) are present.
+   - Method call syntax: All three functions are exposed on the string metatable (`("b"):packsize()`, `(">I2"):pack(0x1234)`, `fmt:unpack(s)`).
+
+2. **Format Specifiers**:
+   - **Endianness**: `<` (little-endian), `>` (big-endian), `=` (native platform endianness). Default is native endian.
+   - **Alignment**: `![n]` sets maximum alignment to `n` bytes (1 <= n <= 16, must be power of 2). Default alignment without `!` is 1 (unaligned). If `!` is provided without `n`, native alignment (8 bytes) is used.
+   - **Signed Integers**: `b` (1 byte), `h` (2 bytes), `l` (8 bytes), `j` (Lua integer, 8 bytes), `i[n]` (signed integer of `n` bytes, 1 <= n <= 16, default 4 bytes).
+   - **Unsigned Integers**: `B` (1 byte), `H` (2 bytes), `L` (8 bytes), `J` (Lua unsigned integer, 8 bytes), `T` (size_t, 8 bytes), `I[n]` (unsigned integer of `n` bytes, 1 <= n <= 16, default 4 bytes).
+   - **Floating Point**: `f` (single precision IEEE 754, 4 bytes), `d` (double precision IEEE 754, 8 bytes), `n` (Lua number, 8 bytes).
+   - **Fixed Strings**: `c[n]` (fixed-size string with `n` bytes; zero-padded on pack if string is shorter; errors if string is longer).
+   - **Zero-Terminated Strings**: `z` (C-style string ending with `\0`; errors on pack if string contains embedded null bytes).
+   - **Length-Prefixed Strings**: `s[n]` (string preceded by `n`-byte unsigned length prefix, 1 <= n <= 16, default `sizeof(size_t)` = 8 bytes). Length prefix is aligned according to `n` and maximum alignment.
+   - **Padding**: `x` (1 zero byte), `Xop` (empty item aligning according to option `op` without reading or writing a value).
+   - **Whitespace**: Space, tab, newline, and carriage return characters inside format strings are ignored.
+
+3. **Memory Sandbox & Safe Bounds**:
+   - Packed string allocation is strictly bounded by `MAX_STRING_PACK_BYTES = 16 * 1024 * 1024` (16 MiB sandbox ceiling).
+   - All arithmetic on buffers, offsets, and string sizes uses checked arithmetic to prevent integer overflow.
+   - Bounds errors, out-of-range integers, strings exceeding fixed buffer sizes, premature string termination during unpacking, and out-of-bounds `pos` values fail gracefully with standard Lua errors.
+
 ---
 
 ## 5. Security & Verification Plan
@@ -171,3 +199,4 @@ The `string.rep(s, n [, sep])` function generates a repeated string separated by
 3. **Malformed UTF-8 Handling**: Assert `utf8.len` returns `nil` and the byte offset of invalid byte sequences without panicking.
 4. **String Method Invocation & Metatable Sandboxing**: Assert that string method calls (`s:len()`, `s:sub()`, `s:upper()`, `s:format()`, `s:find()`) correctly dispatch through the string metatable, custom extension functions on `string` propagate to method calls, direct indexing on strings behaves as expected, and missing methods error gracefully.
 5. **String Repetition Ceiling & DoS Protection**: Assert that `string.rep` with astronomical counts (e.g. `string.rep("a", 1000000000)` or arithmetic overflow with `i64::MAX`) safely fails via `pcall` with `"resulting string too large"`, without memory blowup or panics.
+6. **Binary Pack/Unpack Conformance & Sandbox Ceiling**: Assert round-trip fidelity across all integer widths, endianness flags, floating-point encodings, padding/alignment options, and string types in `crates/phodopus/tests/scripts/pack.lua`. Assert that requests exceeding the 16 MiB allocation ceiling safely fail via `pcall` without memory exhaustion.

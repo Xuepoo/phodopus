@@ -4,10 +4,16 @@ use crate::{
 };
 
 mod format;
+mod pack;
+mod packsize;
 mod patterns;
+mod unpack;
 
 /// Maximum buffer allocation size for `string.rep` (16 MiB sandbox ceiling).
 pub const MAX_STRING_REP_BYTES: usize = 16 * 1024 * 1024;
+
+/// Maximum buffer allocation size for `string.pack` (16 MiB sandbox ceiling).
+pub const MAX_STRING_PACK_BYTES: usize = 16 * 1024 * 1024;
 
 pub fn load_string<'gc>(ctx: Context<'gc>) {
     let string = Table::new(&ctx);
@@ -186,6 +192,82 @@ pub fn load_string<'gc>(ctx: Context<'gc>) {
         }),
     );
 
+    string.set_field(
+        ctx,
+        "pack",
+        Callback::from_fn(&ctx, |ctx, _, mut stack| {
+            let fmt_val = stack
+                .pop_front()
+                .ok_or_else(|| "bad argument #1 to 'pack' (string expected, got no value)")
+                .map_err(|err| err.into_value(ctx))?;
+            let fmt = String::from_value(ctx, fmt_val)?;
+            let fmt_str = fmt.to_str()?;
+
+            let args: Vec<Value> = stack.into_iter().collect();
+
+            let bytes = pack::process(fmt_str, ctx, &args)?;
+
+            stack.replace(ctx, ctx.intern(&bytes));
+            Ok(CallbackReturn::Return)
+        }),
+    );
+
+    string.set_field(
+        ctx,
+        "unpack",
+        Callback::from_fn(&ctx, |ctx, _, mut stack| {
+            let (fmt, s, init) = stack.consume::<(String, String, Option<i64>)>(ctx)?;
+
+            let fmt_str = fmt.to_str()?;
+            let bytes = s.as_bytes();
+            let init = init.unwrap_or(1);
+
+            let len = bytes.len();
+            let pos = if init > 0 {
+                init as usize
+            } else if init < 0 {
+                let abs_init = init.unsigned_abs() as usize;
+                if abs_init > len {
+                    0
+                } else {
+                    len - abs_init + 1
+                }
+            } else {
+                0
+            };
+
+            if pos < 1 || pos > len + 1 {
+                return Err(Error::from_value(
+                    "initial position out of string".into_value(ctx),
+                ));
+            }
+
+            let start_pos = pos - 1;
+
+            let (values, next_pos) = unpack::process(fmt_str, bytes, start_pos, ctx)?;
+
+            stack.clear();
+            stack.extend(values);
+            stack.push_back(Value::Integer(next_pos as i64));
+
+            Ok(CallbackReturn::Return)
+        }),
+    );
+
+    string.set_field(
+        ctx,
+        "packsize",
+        Callback::from_fn(&ctx, |ctx, _, mut stack| {
+            let fmt = stack.consume::<String>(ctx)?;
+            let fmt_str = fmt.to_str()?;
+
+            let total_size = packsize::process(fmt_str, ctx)?;
+
+            stack.replace(ctx, total_size as i64);
+            Ok(CallbackReturn::Return)
+        }),
+    );
+
     patterns::load_patterns(ctx, &string);
 
     ctx.string_metatable()
@@ -218,4 +300,115 @@ fn sub(string: &[u8], i: i64, j: Option<i64>) -> Result<&[u8], std::num::TryFrom
     } else {
         &string[i..j]
     })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Endianness {
+    Little,
+    Big,
+    Native,
+}
+
+impl Default for Endianness {
+    fn default() -> Self {
+        Endianness::Native
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct FormatState {
+    pub endianness: Endianness,
+    pub max_alignment: usize,
+}
+
+impl Default for FormatState {
+    fn default() -> Self {
+        FormatState {
+            endianness: Endianness::Native,
+            max_alignment: 1,
+        }
+    }
+}
+
+pub(crate) fn parse_number(
+    chars: &mut std::iter::Peekable<std::str::Chars>,
+) -> Result<Option<usize>, std::string::String> {
+    let mut n_str = std::string::String::new();
+    while let Some(&c) = chars.peek() {
+        if c.is_ascii_digit() {
+            n_str.push(c);
+            chars.next();
+        } else {
+            break;
+        }
+    }
+
+    if n_str.is_empty() {
+        Ok(None)
+    } else {
+        let n = n_str
+            .parse::<usize>()
+            .map_err(|_| format!("invalid number '{}' in format string", n_str))?;
+        Ok(Some(n))
+    }
+}
+
+pub(crate) fn calculate_padding(
+    current_pos: usize,
+    data_size: usize,
+    max_alignment: usize,
+) -> usize {
+    if max_alignment <= 1 || data_size <= 1 {
+        return 0;
+    }
+    let alignment = std::cmp::min(data_size, max_alignment);
+    if !alignment.is_power_of_two() {
+        return 0;
+    }
+    (alignment - (current_pos % alignment)) % alignment
+}
+
+pub(crate) fn get_format_size(format_char: char, num_opt: Option<usize>) -> Option<usize> {
+    match format_char {
+        'b' | 'B' | 'x' => Some(1),
+        'h' | 'H' => Some(std::mem::size_of::<i16>()),
+        'l' | 'L' | 'j' => Some(std::mem::size_of::<i64>()),
+        'J' => Some(std::mem::size_of::<u64>()),
+        'T' => Some(std::mem::size_of::<usize>()),
+        'i' | 'I' => Some(num_opt.unwrap_or(std::mem::size_of::<i32>())),
+        'f' => Some(std::mem::size_of::<f32>()),
+        'd' | 'n' => Some(std::mem::size_of::<f64>()),
+        'c' => num_opt,
+        'z' | 's' => None,
+        _ => None,
+    }
+}
+
+pub(crate) fn get_align_size_for_option(
+    op: char,
+    num_opt: Option<usize>,
+) -> Result<usize, std::string::String> {
+    match op {
+        'b' | 'B' | 'x' => Ok(1),
+        'h' | 'H' => Ok(2),
+        'l' | 'L' | 'j' | 'J' | 'T' => Ok(8),
+        'f' => Ok(4),
+        'd' | 'n' => Ok(8),
+        'i' | 'I' => {
+            let n = num_opt.unwrap_or(4);
+            if !(1..=16).contains(&n) {
+                return Err(format!("integral size {} out of limits [1, 16]", n));
+            }
+            Ok(n)
+        }
+        's' => {
+            let n = num_opt.unwrap_or(std::mem::size_of::<usize>());
+            if !(1..=16).contains(&n) {
+                return Err(format!("integral size {} out of limits [1, 16]", n));
+            }
+            Ok(n)
+        }
+        'c' | 'z' => Ok(1),
+        _ => Err(format!("invalid option '{}' following 'X'", op)),
+    }
 }
