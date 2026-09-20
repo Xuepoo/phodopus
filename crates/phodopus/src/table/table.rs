@@ -4,7 +4,7 @@ use std::{
     i64, mem,
 };
 
-use gc_arena::{lock::RefLock, Collect, Gc, Mutation};
+use gc_arena::{Collect, Gc, Mutation, lock::RefLock};
 
 use crate::{Context, FromValue, IntoValue, TypeError, Value};
 

@@ -1,6 +1,6 @@
 use std::mem;
 
-use phodopus::{opcode::OpCode, Callback, Closure, String, Table, Thread, UserData, Value};
+use phodopus::{Callback, Closure, String, Table, Thread, UserData, Value, opcode::OpCode};
 
 #[test]
 fn test_sizes() {

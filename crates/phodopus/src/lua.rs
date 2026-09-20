@@ -1,12 +1,14 @@
 use std::ops;
 
 use gc_arena::{
+    Arena, Collect, Mutation, Rootable,
     arena::{CollectionPhase, Root},
     metrics::Metrics,
-    Arena, Collect, Mutation, Rootable,
 };
 
 use crate::{
+    Error, ExternError, FromMultiValue, FromValue, Fuel, IntoValue, Registry, RuntimeError,
+    Singleton, StashedExecutor, String, Table, TypeError, Value,
     finalizers::Finalizers,
     stash::{Fetchable, Stashable},
     stdlib::{
@@ -15,8 +17,6 @@ use crate::{
     },
     string::InternedStringSet,
     thread::BadThreadMode,
-    Error, ExternError, FromMultiValue, FromValue, Fuel, IntoValue, Registry, RuntimeError,
-    Singleton, StashedExecutor, String, Table, TypeError, Value,
 };
 
 /// A value representing the main "execution context" of a Lua state.

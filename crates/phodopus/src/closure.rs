@@ -1,15 +1,15 @@
 use std::hash::{Hash, Hasher};
 
-use allocator_api2::{boxed, vec, SliceExt};
-use gc_arena::{allocator_api::MetricsAlloc, lock::Lock, Collect, Gc, Mutation};
+use allocator_api2::{SliceExt, boxed, vec};
+use gc_arena::{Collect, Gc, Mutation, allocator_api::MetricsAlloc, lock::Lock};
 use thiserror::Error;
 
 use crate::{
+    Constant, Context, String, Table, Value,
     compiler::{self, CompiledPrototype, FunctionRef, LineNumber},
     opcode::OpCode,
     thread::OpenUpValue,
     types::UpValueDescriptor,
-    Constant, Context, String, Table, Value,
 };
 
 // Note: These errors must not have #[error(transparent)] so that

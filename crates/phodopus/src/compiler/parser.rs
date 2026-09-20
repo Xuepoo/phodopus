@@ -3,8 +3,8 @@ use std::{fmt, ops, rc::Rc};
 use thiserror::Error;
 
 use super::{
-    lexer::{LexError, Lexer, LineNumber, Token},
     StringInterner,
+    lexer::{LexError, Lexer, LineNumber, Token},
 };
 
 #[derive(Debug, Clone)]
@@ -647,7 +647,7 @@ impl<S: StringInterner> Parser<'_, S> {
                                 String::from_utf8_lossy(attr.as_ref()).into_owned(),
                             ),
                             line_number,
-                        })
+                        });
                     }
                 }
             } else {
@@ -713,7 +713,7 @@ impl<S: StringInterner> Parser<'_, S> {
                             return Err(ParseError {
                                 kind: ParseErrorKind::AssignToExpression,
                                 line_number,
-                            })
+                            });
                         }
                     }
                 };

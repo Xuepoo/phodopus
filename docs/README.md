@@ -33,28 +33,28 @@ Phodopus is an independent, sandbox-first Lua runtime designed for uncompromisin
 
 The documentation is organized into focused topic trees:
 
-| Tree | Scope and Entry Point | Status |
-| :--- | :--- | :--- |
-| [Architecture](architecture/README.md) | Pure-Rust VM execution model, `gc-arena` cycle collection, stackless trampolines, and the 6-phase roadmap. | Active |
-| [Specifications](specifications/README.md) | Concrete contracts: Fuel & sandboxing, modular stdlib (`string.format`, Lua patterns, `utf8`), module resolver (`require`), and host async bridge. | Active |
-| [Security](security/README.md) | Sandbox threat model, isolation guarantees, host callback boundaries, and resource limits. | Active |
-| [Integration](integration/README.md) | Host-consumer boundary records: how an external project consumes Phodopus, beginning with the Bitty dependency relationship and `bitty-lua` Host ABI boundary. | Active |
-| [Development](development/README.md) | Documentation spines, engineering lifecycle, toolchain policies (Rust 1.98.1, MSRV 1.85), and CI verification. | Active |
+| Tree                                       | Scope and Entry Point                                                                                                                                          | Status |
+| :----------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------- | :----- |
+| [Architecture](architecture/README.md)     | Pure-Rust VM execution model, `gc-arena` cycle collection, stackless trampolines, and the 6-phase roadmap.                                                     | Active |
+| [Specifications](specifications/README.md) | Concrete contracts: Fuel & sandboxing, modular stdlib (`string.format`, Lua patterns, `utf8`), module resolver (`require`), and host async bridge.             | Active |
+| [Security](security/README.md)             | Sandbox threat model, isolation guarantees, host callback boundaries, and resource limits.                                                                     | Active |
+| [Integration](integration/README.md)       | Host-consumer boundary records: how an external project consumes Phodopus, beginning with the Bitty dependency relationship and `bitty-lua` Host ABI boundary. | Active |
+| [Development](development/README.md)       | Documentation spines, engineering lifecycle, toolchain policies (Rust 1.98.1, edition 2024, MSRV 1.85), and CI verification.                                   | Active |
 
 ---
 
 ## Document Index
 
-| Document | Type | Status | Summary |
-| :--- | :--- | :--- | :--- |
-| [Architecture Overview](architecture/overview.md) | Architecture | Accepted | Stackless VM design, zero-cost `Gc` pointers with generative lifetimes, and host trampoline loops. |
-| [Evolution Roadmap](architecture/roadmap.md) | Architecture | Accepted | Six-phase roadmap from Piccolo baseline fork to production sandbox runtime. |
-| [Garbage Collector Strategy](architecture/gc-strategy.md) | Architecture | Accepted | Dependency pinning, memory accounting evolution, and hard quota strategy for `gc-arena`. |
-| [Sandbox & Fuel Specification](specifications/sandbox-and-fuel.md) | Specification | Partial | Deterministic instruction budgeting, preemption thresholds, and hard heap allocation ceilings. |
-| [Modular Standard Library Specification](specifications/modular-stdlib.md) | Specification | Partial | Capability-gated stdlib: formatting, authentic Lua patterns, UTF-8 code points, and table helpers. |
-| [Module Resolver Specification](specifications/module-resolver.md) | Specification | Planned | Sandboxed `require` searcher chains, preloaded modules, and capability VFS resolvers. |
-| [Async Trampoline Specification](specifications/async-trampoline.md) | Specification | Planned | Host-agnostic async suspension protocol (`HostOp::Pending`) without Tokio VM coupling. |
-| [Threat Model & Trust Boundaries](security/threat-model.md) | Policy | Accepted | Defensive boundaries, host callback trust boundaries, and panic containment. |
-| [Bitty Host ABI Boundary](integration/bitty-host-abi.md) | Specification | Accepted | Bitty consumes Phodopus as a generic dependency; `bitty-lua` host boundary, async trampoline crossing, text-layout separation, deferral, and mapped integration capabilities. |
-| [Documentation Workflow](development/documentation-workflow.md) | Guide | Accepted | Section spines, review sign-off gates, and document maintenance workflow. |
-| [Toolchain Policy](development/toolchain-policy.md) | Policy | Accepted | Rust 1.98.1 toolchain, MSRV 1.85, Clippy lint configurations, and justfile gates. |
+| Document                                                                   | Type          | Status   | Summary                                                                                                                                                                       |
+| :------------------------------------------------------------------------- | :------------ | :------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Architecture Overview](architecture/overview.md)                          | Architecture  | Accepted | Stackless VM design, zero-cost `Gc` pointers with generative lifetimes, and host trampoline loops.                                                                            |
+| [Evolution Roadmap](architecture/roadmap.md)                               | Architecture  | Accepted | Six-phase roadmap from Piccolo baseline fork to production sandbox runtime.                                                                                                   |
+| [Garbage Collector Strategy](architecture/gc-strategy.md)                  | Architecture  | Accepted | Dependency pinning, memory accounting evolution, and hard quota strategy for `gc-arena`.                                                                                      |
+| [Sandbox & Fuel Specification](specifications/sandbox-and-fuel.md)         | Specification | Partial  | Deterministic instruction budgeting, preemption thresholds, and hard heap allocation ceilings.                                                                                |
+| [Modular Standard Library Specification](specifications/modular-stdlib.md) | Specification | Partial  | Capability-gated stdlib: formatting, authentic Lua patterns, UTF-8 code points, and table helpers.                                                                            |
+| [Module Resolver Specification](specifications/module-resolver.md)         | Specification | Planned  | Sandboxed `require` searcher chains, preloaded modules, and capability VFS resolvers.                                                                                         |
+| [Async Trampoline Specification](specifications/async-trampoline.md)       | Specification | Planned  | Host-agnostic async suspension protocol (`HostOp::Pending`) without Tokio VM coupling.                                                                                        |
+| [Threat Model & Trust Boundaries](security/threat-model.md)                | Policy        | Accepted | Defensive boundaries, host callback trust boundaries, and panic containment.                                                                                                  |
+| [Bitty Host ABI Boundary](integration/bitty-host-abi.md)                   | Specification | Accepted | Bitty consumes Phodopus as a generic dependency; `bitty-lua` host boundary, async trampoline crossing, text-layout separation, deferral, and mapped integration capabilities. |
+| [Documentation Workflow](development/documentation-workflow.md)            | Guide         | Accepted | Section spines, review sign-off gates, and document maintenance workflow.                                                                                                     |
+| [Toolchain Policy](development/toolchain-policy.md)                        | Policy        | Accepted | Rust 1.98.1 toolchain, edition 2024, MSRV 1.85, Clippy lint configurations, and justfile gates.                                                                               |

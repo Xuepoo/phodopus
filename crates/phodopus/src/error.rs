@@ -7,8 +7,8 @@ use gc_arena::{Collect, Gc, Rootable};
 use thiserror::Error;
 
 use crate::{
-    compiler::LineNumber, Callback, CallbackReturn, Context, FromValue, Function, IntoValue,
-    MetaMethod, Singleton, Table, UserData, Value,
+    Callback, CallbackReturn, Context, FromValue, Function, IntoValue, MetaMethod, Singleton,
+    Table, UserData, Value, compiler::LineNumber,
 };
 
 #[derive(Debug, Clone, Copy, Error)]

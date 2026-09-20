@@ -1,8 +1,8 @@
 use crate::{Context, Error, IntoValue};
 
 use super::{
-    calculate_padding, get_align_size_for_option, get_format_size, parse_number, Endianness,
-    FormatState, MAX_STRING_PACK_BYTES,
+    Endianness, FormatState, MAX_STRING_PACK_BYTES, calculate_padding, get_align_size_for_option,
+    get_format_size, parse_number,
 };
 
 pub fn process<'gc>(fmt: &str, ctx: Context<'gc>) -> Result<usize, Error<'gc>> {

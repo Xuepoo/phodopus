@@ -1,12 +1,12 @@
 use fhex::ToHex;
 use parser::{
-    parse_format_string, ConversionSpecifier, ConversionType, FormatElement, NumericParam,
+    ConversionSpecifier, ConversionType, FormatElement, NumericParam, parse_format_string,
 };
 use thiserror::Error;
 
 use crate::{
-    meta_ops::{self, MetaResult},
     Context, Value,
+    meta_ops::{self, MetaResult},
 };
 
 mod parser;
@@ -232,11 +232,7 @@ fn format_signed_integer(value: i64, spec: &ConversionSpecifier) -> Result<Strin
 
     let u = value.unsigned_abs(); // Completely safe against i64::MIN overflow
     let mut digits = if let NumericParam::Literal(0) = spec.precision {
-        if u == 0 {
-            String::new()
-        } else {
-            u.to_string()
-        }
+        if u == 0 { String::new() } else { u.to_string() }
     } else {
         u.to_string()
     };
@@ -359,11 +355,7 @@ fn format_unsigned_integer(
             }
             16 => {
                 if value != 0 {
-                    if uppercase {
-                        "0X"
-                    } else {
-                        "0x"
-                    }
+                    if uppercase { "0X" } else { "0x" }
                 } else {
                     ""
                 }
@@ -431,11 +423,7 @@ fn format_float(value: f64, spec: &ConversionSpecifier) -> Result<String, Format
 
     let (number, can_zero_pad) = if !value.is_finite() {
         let name = if value.is_nan() {
-            if is_upper {
-                "NAN"
-            } else {
-                "nan"
-            }
+            if is_upper { "NAN" } else { "nan" }
         } else if is_upper {
             "INF"
         } else {

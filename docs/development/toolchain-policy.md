@@ -17,14 +17,16 @@ sidebar_order: 32
 
 ## 1. Toolchain Pins
 
-| Tool | Pinned Version | Declaration Location |
-| :--- | :--- | :--- |
-| **Rust Toolchain** | `1.98.1` | `rust-toolchain.toml` |
-| **MSRV** | `1.85.0` | `clippy.toml` |
-| **Rust Edition** | `2021` | `Cargo.toml` |
-| **Actionlint** | `1.7.12` | GitHub Actions CI / local binary |
+| Tool               | Pinned Version | Declaration Location                                  |
+| :----------------- | :------------- | :---------------------------------------------------- |
+| **Rust Toolchain** | `1.98.1`       | `rust-toolchain.toml`                                 |
+| **MSRV**           | `1.85.0`       | `Cargo.toml` (`rust-version`), `clippy.toml` (`msrv`) |
+| **Rust Edition**   | `2024`         | `Cargo.toml` (`[workspace.package]`)                  |
+| **Actionlint**     | `1.7.12`       | GitHub Actions CI / local binary                      |
 
 - **No Unpinned CI**: CI workflows strictly install the pinned `1.98.1` channel with minimal profile components (`rustfmt`, `clippy`).
+- **Edition 2024**: The workspace targets Rust edition 2024, declared once in `Cargo.toml` under `[workspace.package]` and inherited by every member crate (`edition.workspace = true`).
+- **MSRV 1.85**: The minimum supported Rust version is declared as `rust-version = "1.85"` in `[workspace.package]` and inherited by every member crate; `clippy.toml` mirrors it as `msrv = "1.85"`.
 - **Nightly Policy**: The Phodopus core crate does not use unstable nightly compiler flags. All features build cleanly on stable Rust.
 
 ---

@@ -17,7 +17,7 @@ The Development topic tree establishes the engineering standards, documentation 
 
 ## Documents
 
-| Document | Type | Status | Description |
-| :--- | :--- | :--- | :--- |
-| [Documentation Workflow](documentation-workflow.md) | Guide | Accepted | Section spines, review sign-off requirements, and documentation-first lifecycle rules. |
-| [Toolchain Policy](toolchain-policy.md) | Policy | Accepted | Rust 1.98.1 toolchain pins, MSRV 1.85, Clippy configuration, and justfile quality gates. |
+| Document                                            | Type   | Status   | Description                                                                                            |
+| :-------------------------------------------------- | :----- | :------- | :----------------------------------------------------------------------------------------------------- |
+| [Documentation Workflow](documentation-workflow.md) | Guide  | Accepted | Section spines, review sign-off requirements, and documentation-first lifecycle rules.                 |
+| [Toolchain Policy](toolchain-policy.md)             | Policy | Accepted | Rust 1.98.1 toolchain pins, edition 2024, MSRV 1.85, Clippy configuration, and justfile quality gates. |

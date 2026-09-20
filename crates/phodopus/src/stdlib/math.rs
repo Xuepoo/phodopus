@@ -1,8 +1,8 @@
 use gc_arena::Mutation;
 
 use crate::{
-    async_sequence, meta_ops, Callback, CallbackReturn, Context, FromMultiValue, IntoMultiValue,
-    IntoValue, SequenceReturn, Table, Value,
+    Callback, CallbackReturn, Context, FromMultiValue, IntoMultiValue, IntoValue, SequenceReturn,
+    Table, Value, async_sequence, meta_ops,
 };
 
 fn callback<'gc, F, A, R>(name: &'static str, mc: &Mutation<'gc>, f: F) -> Callback<'gc>
@@ -291,7 +291,7 @@ pub fn load_trig<'gc>(ctx: Context<'gc>, math: Table<'gc>) {
 pub fn load_random<'gc>(ctx: Context<'gc>, math: Table<'gc>) {
     use std::{cell::RefCell, rc::Rc};
 
-    use rand::{rngs::SmallRng, Rng, SeedableRng};
+    use rand::{Rng, SeedableRng, rngs::SmallRng};
 
     let seeded_rng = Rc::new(RefCell::new(SmallRng::from_os_rng()));
 

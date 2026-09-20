@@ -1,6 +1,6 @@
 use std::fmt;
 
-use phodopus::{table::NextValue, Table, Value};
+use phodopus::{Table, Value, table::NextValue};
 use serde::de;
 use thiserror::Error;
 

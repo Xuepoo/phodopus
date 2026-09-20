@@ -1,8 +1,8 @@
 use crate::{Context, Error, IntoValue, Value};
 
 use super::{
-    calculate_padding, get_align_size_for_option, parse_number, Endianness, FormatState,
-    MAX_STRING_PACK_BYTES,
+    Endianness, FormatState, MAX_STRING_PACK_BYTES, calculate_padding, get_align_size_for_option,
+    parse_number,
 };
 
 pub fn process<'gc>(

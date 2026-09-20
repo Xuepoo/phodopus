@@ -5,19 +5,19 @@ use std::{
 
 use allocator_api2::vec;
 use gc_arena::{
-    allocator_api::MetricsAlloc, lock::RefLock, Collect, Finalization, Gc, GcWeak, Mutation,
+    Collect, Finalization, Gc, GcWeak, Mutation, allocator_api::MetricsAlloc, lock::RefLock,
 };
 use thiserror::Error;
 
 use crate::{
+    BoxSequence, Callback, Closure, Context, Error, FromMultiValue, Fuel, Function, IntoMultiValue,
+    String, Table, UserData, Value,
     closure::{UpValue, UpValueState},
     compiler::LineNumber,
     error::BacktraceFrame,
     fuel::count_fuel,
     meta_ops,
     types::{RegisterIndex, VarCount},
-    BoxSequence, Callback, Closure, Context, Error, FromMultiValue, Fuel, Function, IntoMultiValue,
-    String, Table, UserData, Value,
 };
 
 use super::VMError;

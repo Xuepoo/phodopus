@@ -1,4 +1,4 @@
-use crate::{meta_ops, BoxSequence, Callback, CallbackReturn, Context, Table, Thread, ThreadMode};
+use crate::{BoxSequence, Callback, CallbackReturn, Context, Table, Thread, ThreadMode, meta_ops};
 
 use super::base::PCall;
 

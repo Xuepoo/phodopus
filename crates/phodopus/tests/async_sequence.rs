@@ -1,6 +1,6 @@
 use phodopus::{
-    async_sequence, meta_ops, Callback, CallbackReturn, Closure, Executor, ExternError, Lua,
-    SequenceReturn, Table, Variadic,
+    Callback, CallbackReturn, Closure, Executor, ExternError, Lua, SequenceReturn, Table, Variadic,
+    async_sequence, meta_ops,
 };
 
 #[test]

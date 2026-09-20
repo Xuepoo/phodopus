@@ -1,6 +1,6 @@
 use crate::{Context, Error, IntoValue, Value};
 
-use super::{calculate_padding, get_align_size_for_option, parse_number, Endianness, FormatState};
+use super::{Endianness, FormatState, calculate_padding, get_align_size_for_option, parse_number};
 
 pub fn process<'gc>(
     fmt: &str,

@@ -32,11 +32,7 @@ impl GMatchInner {
         let current_pos = match init {
             Some(i) if i > 0 => {
                 let idx = (i - 1) as usize;
-                if idx > text_len {
-                    text_len + 1
-                } else {
-                    idx
-                }
+                if idx > text_len { text_len + 1 } else { idx }
             }
             Some(i) if i < 0 => {
                 let abs_i = (-i) as usize;
@@ -89,10 +85,10 @@ impl GMatchInner {
                         })
                         .collect()
                 } else {
-                    vec![StdString::from_utf8_lossy(
-                        &self.bytes[match_range.start..match_range.end],
-                    )
-                    .into_owned()]
+                    vec![
+                        StdString::from_utf8_lossy(&self.bytes[match_range.start..match_range.end])
+                            .into_owned(),
+                    ]
                 };
 
                 Some(Ok(result))

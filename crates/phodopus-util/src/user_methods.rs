@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use gc_arena::{arena::Root, barrier, Collect, Rootable, Static};
+use gc_arena::{Collect, Rootable, Static, arena::Root, barrier};
 use phodopus::{
     Callback, CallbackReturn, Context, Error, Execution, FromMultiValue, IntoMultiValue,
     MetaMethod, Table, UserData,

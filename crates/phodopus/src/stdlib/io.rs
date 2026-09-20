@@ -6,9 +6,9 @@ use std::{
 use gc_arena::Collect;
 
 use crate::{
-    meta_ops::{self, MetaResult},
     BoxSequence, Callback, CallbackReturn, Context, Error, Execution, Sequence, SequencePoll,
     Stack, Value,
+    meta_ops::{self, MetaResult},
 };
 
 pub fn load_io<'gc>(ctx: Context<'gc>) {

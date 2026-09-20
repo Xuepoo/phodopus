@@ -5,7 +5,7 @@ use std::{
 };
 
 use allocator_api2::boxed;
-use gc_arena::{allocator_api::MetricsAlloc, Collect, Gc, Mutation};
+use gc_arena::{Collect, Gc, Mutation, allocator_api::MetricsAlloc};
 
 use crate::{Context, Error, Execution, Function, Stack, Thread};
 
