@@ -13,6 +13,10 @@ updates:
     ignore:
       - dependency-name: "allocator-api2"
         update-types: ["version-update:semver-major"]
+      # rustyline 18 requires home >= 0.5.12 (rustc 1.88), above the project
+      # MSRV of 1.85. Revisit when the workspace MSRV rises. See CTX-0025.
+      - dependency-name: "rustyline"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
