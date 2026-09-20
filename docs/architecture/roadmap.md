@@ -31,6 +31,12 @@ sidebar_order: 12
                                |
                                v
 +-----------------------------------------------------------------+
+| Phase 1.5: Sandboxed Dynamic Loading (PR #91)       [COMPLETED] |
+| - load() text sandboxing, _G init, piecewise iterator protocol  |
++-----------------------------------------------------------------+
+                               |
+                               v
++-----------------------------------------------------------------+
 | Phase 2: Sandboxed Module System (`require`)                    |
 | - Pluggable searcher chain, preloaded modules, VFS abstraction   |
 +-----------------------------------------------------------------+
@@ -85,6 +91,18 @@ Upstream Piccolo has valuable, mature pull requests that solve core runtime gaps
 - [x] **Issue #145: Stack Frame Safety & Nil-Fill Invariants**:
   - Validated zero-cost parameter nil-fill and stack frame hygiene across regular calls, tail calls, generic-for loops, and metamethod calls.
   - Documented stack layout, parameter alignment, and frame security invariants in [VM Stack Safety & Frame Invariants](vm-stack-safety.md).
+
+### Phase 1.5: Sandboxed Dynamic Code Loading & Global `_G` (Completed)
+
+Absorbed upstream community PR #91 with sandbox-first security hardening:
+
+- [x] **PR #91: Sandboxed `load` Implementation**:
+  - Implemented standard Lua 5.4 `load(chunk [, chunkname [, mode [, env]]])`.
+  - Supported string chunks and piecewise function iterator chunks using asynchronous `Sequence` polling.
+  - Enforced sandbox text-only compilation (`mode = "t"` constraint; rejected `mode = "b"` and Lua bytecode signatures).
+  - Supported custom `_ENV` table binding for isolated sandboxing without leaking caller locals.
+  - Bounded piecewise chunk assembly to a 16 MiB ceiling and consumed Fuel proportional to chunk byte length.
+  - Initialized global `_G` pointing directly to `ctx.globals()`.
 
 ### Phase 2: Sandboxed Module System (`require`)
 
