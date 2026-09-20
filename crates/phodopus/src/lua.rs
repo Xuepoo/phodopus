@@ -12,8 +12,8 @@ use crate::{
     finalizers::Finalizers,
     stash::{Fetchable, Stashable},
     stdlib::{
-        load_base, load_coroutine, load_debug, load_io, load_load_text, load_math, load_string,
-        load_table, load_utf8,
+        ModuleConfig, load_base, load_coroutine, load_debug, load_io, load_load_text, load_math,
+        load_module, load_string, load_table, load_utf8,
     },
     string::InternedStringSet,
     thread::BadThreadMode,
@@ -147,6 +147,16 @@ impl Default for Lua {
 }
 
 impl Lua {
+    /// Start building a `Lua` instance with an explicit module configuration.
+    ///
+    /// This is the embedder hook for the sandboxed module system: virtual roots
+    /// and compiled-in modules are injected here, never discovered from the
+    /// host filesystem. The default builder produces the same preload-only
+    /// configuration as [`Lua::core`].
+    pub fn builder() -> LuaBuilder {
+        LuaBuilder::new()
+    }
+
     /// Create a new `Lua` instance with no parts of the stdlib loaded.
     pub fn empty() -> Self {
         Lua {
@@ -155,6 +165,10 @@ impl Lua {
     }
 
     /// Create a new `Lua` instance with the core stdlib loaded.
+    ///
+    /// The module system is installed with an empty [`ModuleConfig`], so
+    /// `require` exists but the VFS chain has no roots and resolves only
+    /// preloaded modules.
     pub fn core() -> Self {
         let mut lua = Self::empty();
         lua.load_core();
@@ -178,7 +192,13 @@ impl Lua {
     ///   - `load_table`
     ///   - `load_utf8`
     ///   - `load_debug`
+    ///   - `load_module` (preload-only by default)
     pub fn load_core(&mut self) {
+        self.load_core_with(&ModuleConfig::default());
+    }
+
+    /// Load the core parts of the stdlib with an explicit module configuration.
+    pub fn load_core_with(&mut self, module_config: &ModuleConfig) {
         self.enter(|ctx| {
             load_base(ctx);
             load_coroutine(ctx);
@@ -187,6 +207,7 @@ impl Lua {
             load_table(ctx);
             load_utf8(ctx);
             load_debug(ctx);
+            load_module(ctx, module_config);
         })
     }
 
@@ -321,6 +342,67 @@ impl Lua {
     ) -> Result<R, ExternError> {
         self.finish(executor).map_err(RuntimeError::new)?;
         self.try_enter(|ctx| ctx.fetch(executor).take_result::<R>(ctx)?)
+    }
+}
+
+/// A builder for a [`Lua`] instance with an explicit module configuration.
+///
+/// The builder exists so the embedder can register compiled-in modules and
+/// capability roots *before* the runtime is created, keeping the module system
+/// free of ambient host paths and filesystem discovery.
+#[derive(Default, Clone)]
+pub struct LuaBuilder {
+    module_config: ModuleConfig,
+    full: bool,
+}
+
+impl LuaBuilder {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    /// Register a compiled-in module source under a logical name.
+    pub fn add_embedded_module(
+        &mut self,
+        name: impl Into<std::string::String>,
+        source: impl Into<std::vec::Vec<u8>>,
+    ) -> &mut Self {
+        self.module_config.add_embedded_module(name, source);
+        self
+    }
+
+    /// Register an empty capability root (virtual namespace) for the VFS.
+    pub fn add_vfs_root(&mut self, namespace: impl Into<std::string::String>) -> &mut Self {
+        self.module_config.add_vfs_root(namespace);
+        self
+    }
+
+    /// Register a module source inside a capability root; the root is created
+    /// implicitly when missing.
+    pub fn add_vfs_module(
+        &mut self,
+        namespace: impl Into<std::string::String>,
+        path: impl Into<std::string::String>,
+        source: impl Into<std::vec::Vec<u8>>,
+    ) -> &mut Self {
+        self.module_config.add_vfs_module(namespace, path, source);
+        self
+    }
+
+    /// Also load the I/O stdlib (equivalent to [`Lua::full`]).
+    pub fn with_io(&mut self) -> &mut Self {
+        self.full = true;
+        self
+    }
+
+    /// Consume the builder and produce a configured `Lua` instance.
+    pub fn build(&self) -> Lua {
+        let mut lua = Lua::empty();
+        lua.load_core_with(&self.module_config);
+        if self.full {
+            lua.load_io();
+        }
+        lua
     }
 }
 
