@@ -13,7 +13,7 @@ sidebar_order: 1
 
 This index is the central entry point and navigation map for the canonical documentation of the **Phodopus** pure-Rust stackless Lua runtime.
 
-Phodopus is an independent, sandbox-first Lua runtime designed for uncompromising isolation, instruction Fuel budgeting, hard memory limits, and host-agnostic asynchronous execution. Documentation drives implementation; every engineering task is guided by the specifications and architectural contracts contained in this corpus.
+Phodopus is an independent, sandbox-first Lua runtime designed for uncompromising isolation, instruction Fuel budgeting, hard memory limits, and host-agnostic asynchronous execution. Fuel budgeting, stackless execution, and the absorbed Phase 1/1.5 standard library and `load` work are implemented; hard memory quotas, the module system, and the async bridge are target state. [Evolution Roadmap](architecture/roadmap.md) is the single implementation truth for phase status. Documentation drives implementation; every engineering task is guided by the specifications and architectural contracts contained in this corpus.
 
 ---
 
@@ -54,7 +54,7 @@ The documentation is organized into focused topic trees:
 | [Modular Standard Library Specification](specifications/modular-stdlib.md) | Specification | Partial  | Capability-gated stdlib: formatting, authentic Lua patterns, UTF-8 code points, and table helpers.                                                                            |
 | [Module Resolver Specification](specifications/module-resolver.md)         | Specification | Planned  | Sandboxed `require` searcher chains, preloaded modules, and capability VFS resolvers.                                                                                         |
 | [Async Trampoline Specification](specifications/async-trampoline.md)       | Specification | Planned  | Host-agnostic async suspension protocol (`HostOp::Pending`) without Tokio VM coupling.                                                                                        |
-| [Threat Model & Trust Boundaries](security/threat-model.md)                | Policy        | Accepted | Defensive boundaries, host callback trust boundaries, and panic containment.                                                                                                  |
+| [Threat Model & Trust Boundaries](security/threat-model.md)                | Policy        | Accepted | Defensive boundaries, host callback trust boundaries, and the panic policy.                                                                                                   |
 | [Unsafe Code Ledger](security/unsafe-ledger.md)                            | Reference     | Accepted | Exact inventory of every `unsafe` site, its soundness invariant, owning module, exercising test, and the `scripts/check-unsafe-ledger.sh` gate.                               |
 | [Bitty Host ABI Boundary](integration/bitty-host-abi.md)                   | Specification | Accepted | Bitty consumes Phodopus as a generic dependency; `bitty-lua` host boundary, async trampoline crossing, text-layout separation, deferral, and mapped integration capabilities. |
 | [Documentation Workflow](development/documentation-workflow.md)            | Guide         | Accepted | Section spines, review sign-off gates, and document maintenance workflow.                                                                                                     |

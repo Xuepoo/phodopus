@@ -27,8 +27,12 @@ Phodopus solves these challenges at the VM foundation by combining:
 
 - A **stackless bytecode interpreter** running on an explicit frame heap.
 - **Generative lifetime branding** via `gc-arena` for zero-cost, memory-safe garbage collection.
-- Deterministic **Fuel preemption** and **hard memory limits**.
-- An **external host trampoline** enabling zero-cost coroutine suspension across async boundaries.
+- Deterministic **Fuel preemption** today; **hard memory limits** are Phase 3
+  target state and are not yet implemented (see [Evolution Roadmap](roadmap.md)).
+- An **external host trampoline**; the typed `HostOp::Pending(handle)`
+  asynchronous suspension descriptor is Phase 4 target state and is not yet
+  implemented. The diagram below shows the target architecture, with planned
+  pieces marked.
 
 ```text
 +---------------------------------------------------------------+
@@ -39,7 +43,7 @@ Phodopus solves these challenges at the VM foundation by combining:
                mutate() / step() / resume()
                                v
 +---------------------------------------------------------------+
-|                       Phodopus Core                           |
+|                       Phodopus Core (implemented)             |
 |  +-----------------------+     +----------------------------+ |
 |  |     gc-arena Heap     |     |   Stackless VM Executor    | |
 |  | - Table / String      |     | - Frame Stack (Heap)       | |
@@ -48,13 +52,26 @@ Phodopus solves these challenges at the VM foundation by combining:
 |  +-----------------------+     +----------------------------+ |
 +---------------------------------------------------------------+
                                |
-             HostOp::Pending(handle) Suspension
+             HostOp::Pending(handle) Suspension (Phase 4 target)
                                v
 +---------------------------------------------------------------+
-|                      Host Async Bridge                        |
+|                 Host Async Bridge (Phase 4 target)            |
 |  (Drives background operations and resumes paused coroutines) |
 +---------------------------------------------------------------+
 ```
+
+### 1.1 Implementation Status
+
+This page describes the target execution architecture. Phase status is owned by
+the [Evolution Roadmap](roadmap.md); the following qualification applies to the
+diagram and the sections below:
+
+- **Implemented today**: the stackless executor, `gc-arena` generational
+  branding, `Sequence` state machines, and instruction Fuel preemption.
+- **Target state — not implemented**: hard allocator-enforced memory quotas
+  (Phase 3) and the `HostOp::Pending(handle)` asynchronous bridge with its host
+  trampoline (Phase 4). Where those appear below, they are labeled as target
+  state.
 
 ---
 
@@ -125,7 +142,7 @@ Arena::mutate() ---> Executor::step()
 
 ### 3.2 Benefits of the Stackless Model
 
-- **Immunity to Native Overflow**: A recursive Lua script hitting 100,000 stack depth merely grows the heap frame buffer until a memory ceiling is hit; it cannot cause an unrecoverable native OS stack overflow.
+- **Immunity to Native Overflow**: A recursive Lua script hitting 100,000 stack depth merely grows the heap frame buffer; it cannot cause an unrecoverable native OS stack overflow. Today that growth is bounded only by host memory; the Phase 3 hard memory ceiling is not yet enforced (see Section 1.1).
 - **Microsecond Cold Starts**: A fresh `Lua` instance initializes in approximately **35 µs** with an initial base heap consumption of only **~11.2 KB**.
 - **Cooperative Multitasking**: Thousands of independent Lua threads can be stepped concurrently within a single OS thread.
 
@@ -145,6 +162,6 @@ Phodopus tracks execution cost using an instruction budget called **Fuel**. Ever
 
 Phodopus maintains strict security invariants:
 
-- **No Ambient Authority**: Standard filesystem, process execution, and network APIs are completely decoupled and absent from the base engine.
-- **Sound Generative Branding**: `unsafe` blocks are restricted to low-level raw table manipulation and downcasting inside `gc-arena`, fully audited and verified.
+- **No Ambient Authority**: Standard filesystem, process execution, and network APIs are completely decoupled and absent from the base engine. I/O is opt-in (`print`, dynamic loading) rather than ambient.
+- **Bounded `unsafe`**: `unsafe` is confined to specific VM and `gc-arena` primitives (raw table access, downcasting, callback erasure, string interning, and utility freeze support) rather than eliminated. The exact unsafe ledger and its invariants are owned by the security corpus; see the threat model.
 - **Host Agnosticism**: The core runtime contains no dependency on Tokio, async-std, or any external platform runtime.
