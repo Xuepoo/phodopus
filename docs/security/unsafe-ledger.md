@@ -27,8 +27,9 @@ expressed in safe Rust. Every site is:
 2. **Justified in place** with a `SAFETY:` comment at the call site.
 3. **Gated** by `scripts/check-unsafe-ledger.sh`, which fails when the source set diverges from the
    machine manifest in [Section 4](#4-machine-manifest), when a site lacks a `SAFETY:` comment, or
-   when `unsafe` appears in the stdlib or compiler trees (the planned module resolver will be added
-   to the gate when it lands).
+   when `unsafe` appears in the stdlib or compiler trees. The module resolver has landed in
+   `crates/phodopus/src/stdlib/` and is already inside that forbidden tree
+   (`scripts/check-unsafe-ledger.sh:107-120`).
 
 In scope: every `unsafe` token in a Rust source file under `crates/`. Out of scope: safe API
 surface, dependency internals (`gc-arena`, `hashbrown`), and build tooling.
