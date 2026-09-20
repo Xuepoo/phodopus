@@ -28,6 +28,8 @@ sidebar_order: 22
 - Binary packing and unpacking (`string.pack`, `string.unpack`, `string.packsize`) with standard format specifiers, checked alignment, endianness, and memory sandbox limits.
 - Standard Lua `utf8` library implementation.
 - Separation of standard UTF-8 code points from terminal typography (monospace column width).
+- Sandboxed dynamic code loading (`load`) enforcing text-only compilation, custom environment isolation, fuel consumption, and memory allocation bounds.
+- Global environment registration (`_G`).
 
 ### Out of Scope
 
@@ -190,6 +192,40 @@ Phodopus implements standard Lua 5.3 binary packing and unpacking according to s
    - All arithmetic on buffers, offsets, and string sizes uses checked arithmetic to prevent integer overflow.
    - Bounds errors, out-of-range integers, strings exceeding fixed buffer sizes, premature string termination during unpacking, and out-of-bounds `pos` values fail gracefully with standard Lua errors.
 
+### 4.7 Sandboxed Dynamic Code Loading (`load`) and Global `_G`
+
+Phodopus implements Lua 5.4 standard `load(chunk [, chunkname [, mode [, env]]])` and global `_G` in `crates/phodopus/src/stdlib/load.rs` and `crates/phodopus/src/stdlib/base.rs`:
+
+1. **Global `_G` Registration**:
+   - `_G` is registered as a global pointing directly to `ctx.globals()`.
+   - Satisfies canonical Lua invariants: `_G == _ENV` in the main chunk, `_G._G == _G`, and global assignments (`_G.a = 1`) reflect across the global environment.
+
+2. **Chunk Types & Iterator Protocol**:
+   - **String Chunks**: Compiled directly via `Closure::load_with_env`.
+   - **Function Chunks**: Consumed piecewise using an asynchronous `Sequence` (`BuildLoadString`) until the iterator function returns `nil` or the empty string `""`.
+   - Number return values from the iterator function are automatically coerced to strings.
+   - Non-string, non-number return values safely fail with `(nil, "error loading string: ...")`.
+   - Other chunk argument types raise a standard `TypeError` (`"string or function"` expected).
+
+3. **Sandbox-First Security (Text-Only Enforcement)**:
+   - Binary bytecode chunks introduce severe security vulnerabilities (arbitrary memory inspection, bytecode verifier exploits, undefined behavior) in untrusted sandboxes.
+   - Phodopus strictly restricts `load` to text chunks:
+     - If `mode == "b"`, the operation is rejected immediately with `(nil, "attempt to load a binary chunk (mode is 't')")`.
+     - If the chunk data starts with bytecode magic (any byte starting with `\x1b`, including `\x1bLua`), compilation is rejected with `(nil, "attempt to load a binary chunk (mode is 't')")`.
+     - Invalid mode strings return `(nil, "invalid mode")`.
+
+4. **Environment Isolation & Sandboxing**:
+   - `env` defaults to `ctx.globals()`.
+   - When a custom table `env` is supplied, the compiled closure's top-level `_ENV` upvalue binds strictly to that table (`Closure::load_with_env(ctx, Some(&*name), source, env)`).
+   - Caller local variables are never leaked into the loaded chunk.
+
+5. **Resource Limits & Fuel Accounting**:
+   - Piecewise chunk assembly is bounded by `MAX_CHUNK_SIZE = 16 * 1024 * 1024` (16 MiB allocation ceiling). Exceeding this bound returns `(nil, "chunk too large")`.
+   - Dynamic compilation consumes Fuel proportional to the chunk byte length: `exec.fuel().consume(count_fuel(32, source.len()))`.
+
+6. **Error Return Semantics**:
+   - Compilation and syntax errors do not panic or throw unhandled Rust errors; they return two values: `nil, error_message` where `error_message` is a Lua string.
+
 ---
 
 ## 5. Security & Verification Plan
@@ -200,3 +236,4 @@ Phodopus implements standard Lua 5.3 binary packing and unpacking according to s
 4. **String Method Invocation & Metatable Sandboxing**: Assert that string method calls (`s:len()`, `s:sub()`, `s:upper()`, `s:format()`, `s:find()`) correctly dispatch through the string metatable, custom extension functions on `string` propagate to method calls, direct indexing on strings behaves as expected, and missing methods error gracefully.
 5. **String Repetition Ceiling & DoS Protection**: Assert that `string.rep` with astronomical counts (e.g. `string.rep("a", 1000000000)` or arithmetic overflow with `i64::MAX`) safely fails via `pcall` with `"resulting string too large"`, without memory blowup or panics.
 6. **Binary Pack/Unpack Conformance & Sandbox Ceiling**: Assert round-trip fidelity across all integer widths, endianness flags, floating-point encodings, padding/alignment options, and string types in `crates/phodopus/tests/scripts/pack.lua`. Assert that requests exceeding the 16 MiB allocation ceiling safely fail via `pcall` without memory exhaustion.
+7. **Sandboxed Dynamic Loading Conformance**: Assert in `crates/phodopus/tests/scripts/load.lua` and `globals.lua` that basic and piecewise string loading, argument passing, chunkname preservation in tracebacks, custom `_ENV` table sandboxing, syntax error returns (`nil, string`), and binary chunk rejections (`mode = "b"` or bytecode magic) operate without panics.
