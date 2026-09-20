@@ -1,4 +1,6 @@
-use crate::{Callback, CallbackReturn, Context, FromValue, IntoValue, String, Table, Value};
+use crate::{
+    Callback, CallbackReturn, Context, FromValue, IntoValue, MetaMethod, String, Table, Value,
+};
 
 mod format;
 mod patterns;
@@ -124,6 +126,10 @@ pub fn load_string<'gc>(ctx: Context<'gc>) {
     );
 
     patterns::load_patterns(ctx, &string);
+
+    ctx.string_metatable()
+        .set(ctx, MetaMethod::Index, string)
+        .unwrap();
 
     ctx.set_global("string", string);
 }
