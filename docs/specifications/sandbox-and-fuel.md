@@ -157,7 +157,8 @@ overclaiming.
 > installs a hard ceiling; `Lua::total_memory()` remains the observational API. See the honest
 > scope note at the end of this section for the exact boundary.
 
-Memory allocation within `gc-arena` utilizes a custom allocator tracking allocated bytes against a hard limit:
+The quota is tracked against the byte count `gc-arena` already reports for the arena (`Metrics`),
+with a hard ceiling layered on top:
 
 ```rust
 pub struct MemoryLimit {
