@@ -110,12 +110,14 @@ pub trait ModuleSearcher<'gc>: Collect {
 }
 ```
 
-`package.preload` carries the core built-in libraries already loaded into the
-runtime (`string`, `table`, `math`, `coroutine`, `utf8`, `debug`, and `io` when
-present). Each preloaded loader returns the corresponding global table, so
-`require("string") == string` holds without any VFS access. A core library that
-is not loaded (for example `io` under `Lua::core()`) is simply absent from
-`package.preload` and fails to resolve.
+`package.preload` carries the core standard-library globals already loaded into
+the runtime (`string`, `table`, `math`, `coroutine`, `utf8`, and `debug`). Each
+preloaded loader returns the corresponding global table, so
+`require("string") == string` holds without any VFS access. A listed library
+whose global is not loaded is simply absent from `package.preload` and fails to
+resolve. The list is fixed to those six names: `io` is never requireable, since
+loading the I/O stdlib installs only the `print` global and no `io` table, so
+`require("io")` always fails.
 
 ### 2.3 Sandboxed Virtual Filesystem (VFS) Resolution
 
