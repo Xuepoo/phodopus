@@ -1,9 +1,13 @@
 use crate::{
-    Callback, CallbackReturn, Context, FromValue, IntoValue, MetaMethod, String, Table, Value,
+    Callback, CallbackReturn, Context, Error, FromValue, IntoValue, MetaMethod, String, Table,
+    Value,
 };
 
 mod format;
 mod patterns;
+
+/// Maximum buffer allocation size for `string.rep` (16 MiB sandbox ceiling).
+pub const MAX_STRING_REP_BYTES: usize = 16 * 1024 * 1024;
 
 pub fn load_string<'gc>(ctx: Context<'gc>) {
     let string = Table::new(&ctx);
@@ -121,6 +125,63 @@ pub fn load_string<'gc>(ctx: Context<'gc>) {
             })?;
 
             stack.replace(ctx, formatted);
+            Ok(CallbackReturn::Return)
+        }),
+    );
+
+    string.set_field(
+        ctx,
+        "rep",
+        Callback::from_fn(&ctx, |ctx, _, mut stack| {
+            let (s, n, sep) = stack.consume::<(String, i64, Option<String>)>(ctx)?;
+
+            if n <= 0 {
+                stack.replace(ctx, ctx.intern_static(b""));
+                return Ok(CallbackReturn::Return);
+            }
+
+            if n == 1 {
+                stack.replace(ctx, s);
+                return Ok(CallbackReturn::Return);
+            }
+
+            let n = usize::try_from(n)
+                .map_err(|_| Error::from_value("resulting string too large".into_value(ctx)))?;
+
+            let s_bytes = s.as_bytes();
+            let sep_bytes = sep.as_ref().map(|s| s.as_bytes()).unwrap_or(b"");
+
+            let s_total_len = s_bytes.len().checked_mul(n);
+            let sep_total_len = sep_bytes.len().checked_mul(n - 1);
+
+            let required_cap = match (s_total_len, sep_total_len) {
+                (Some(s_total), Some(sep_total)) => s_total.checked_add(sep_total),
+                _ => None,
+            };
+
+            let capacity = required_cap
+                .filter(|&cap| cap <= MAX_STRING_REP_BYTES)
+                .ok_or_else(|| Error::from_value("resulting string too large".into_value(ctx)))?;
+
+            if capacity == 0 {
+                stack.replace(ctx, ctx.intern_static(b""));
+                return Ok(CallbackReturn::Return);
+            }
+
+            let mut result = Vec::with_capacity(capacity);
+            result.extend_from_slice(s_bytes);
+            if sep_bytes.is_empty() {
+                for _ in 1..n {
+                    result.extend_from_slice(s_bytes);
+                }
+            } else {
+                for _ in 1..n {
+                    result.extend_from_slice(sep_bytes);
+                    result.extend_from_slice(s_bytes);
+                }
+            }
+
+            stack.replace(ctx, ctx.intern(&result));
             Ok(CallbackReturn::Return)
         }),
     );

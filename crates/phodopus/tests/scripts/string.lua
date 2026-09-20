@@ -137,3 +137,25 @@ do
     assert(is_err(function() return string.char(256) end))
     assert(is_err(function() return string.char(-1) end))
 end
+
+do
+    assert(is_err(function() return string.rep(nil, 1) end))
+    assert(is_err(function() return string.rep(true, 1) end))
+    assert(is_err(function() return string.rep("a", nil) end))
+    assert(string.rep("a", 5) == "aaaaa")
+    assert(string.rep("foo", 3, ",") == "foo,foo,foo")
+    assert(string.rep("foo", 1, ",") == "foo")
+    assert(string.rep("foo", 0) == "")
+    assert(string.rep("foo", -3) == "")
+    assert(string.rep("", 10, "-") == "---------")
+    assert(string.rep("a", 3, "") == "aaa")
+    assert(string.rep(123, 2) == "123123")
+    assert(string.rep("a", 2, 9) == "a9a")
+    assert(("hello "):rep(2) == "hello hello ")
+    assert(("a"):rep(3, "-") == "a-a-a")
+
+    local ok, err = pcall(string.rep, "a", 1000000000)
+    assert(not ok)
+    assert(string.find(tostring(err), "resulting string too large", 1, true) ~= nil)
+end
+
