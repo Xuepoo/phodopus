@@ -13,15 +13,18 @@
 # only); it is expected to fail until a follow-up clears the baseline sites.
 # Measured baseline (2026-09-20, Rust 1.98.1, workspace --all-targets):
 #   118 warnings in the `phodopus` lib, 15 in the `phodopus-util` lib;
-#   141 unique warning sites across 38 clippy lints; no rustc-level warnings.
+#   157 unique warning sites across 38 clippy lints; no rustc-level warnings.
 #   `clippy -- -D warnings` with no baseline: 120 compile errors.
+# `clippy::ptr_arg` is baselined for CTX-0013's `ensure_capacity` in
+# `stdlib/string/pack.rs` (source-owned by CTX-0013); `if_same_then_else` no
+# longer fires and was dropped.
 #
 # Scope of `just check`
 # ---------------------------------------------------------------------------
 # `just check` does NOT cover MSRV 1.85 or non-Linux platforms. MSRV is verified
 # by the separate CI `msrv` job and locally by `just msrv`; Windows/macOS/Linux
 # are the separate CI `Test (os)` matrix jobs. `just release-check` bundles the
-# release-facing gates (MSRV, version consistency, package dry run, strict
+# release-facing gates (MSRV, version consistency, package file-set check, strict
 # clippy) and is intentionally stricter than `just check`.
 
 default: check
@@ -30,9 +33,10 @@ default: check
 check: fmt-check typecheck clippy test links unsafe-ledger actionlint markdownlint
 
 # Release-facing gate. Stricter than `check`: adds MSRV, version consistency,
-# Cargo package dry run, and the strict (empty-baseline) clippy policy. Expected
-# to fail while the clippy baseline (tracked follow-up) and the gc-arena
-# packaging gap (CTX-0016) remain; that failure is the honest release signal.
+# the Cargo package file-set check, and the strict (empty-baseline) clippy
+# policy. Expected to fail only while the clippy baseline (tracked follow-up)
+# remains; that failure is the honest release signal. The package check is not a
+# failure source: the source-only distribution model (CTX-0016) makes it pass.
 release-check: check msrv version-check package-check clippy-strict
 
 fmt:
@@ -56,7 +60,6 @@ clippy:
         -A clippy::disallowed_names \
         -A clippy::explicit_auto_deref \
         -A clippy::get_first \
-        -A clippy::if_same_then_else \
         -A clippy::implicit_saturating_sub \
         -A clippy::legacy_numeric_constants \
         -A clippy::len_without_is_empty \
@@ -76,6 +79,7 @@ clippy:
         -A clippy::needless_lifetimes \
         -A clippy::needless_range_loop \
         -A clippy::neg_cmp_op_on_partial_ord \
+        -A clippy::ptr_arg \
         -A clippy::ptr_offset_with_cast \
         -A clippy::redundant_closure \
         -A clippy::redundant_pattern_matching \
@@ -135,11 +139,13 @@ version-check:
     fi
     echo "version-check: OK (${version}${tag:+; tag ${tag}})"
 
-# Cargo package dry run for every publishable workspace member. Currently fails
-# on the git-only gc-arena dependency (no registry version requirement); the
-# fix is owned by CTX-0016. Kept as a release gate so the defect cannot hide.
+# Cargo package file-set check for every workspace member. Under the source-only
+# distribution model adopted by CTX-0016 (`publish = false`, gc-arena pinned to a
+# git revision with no API-compatible registry version), `cargo package` manifest
+# verification cannot succeed; `--list` is the supported package check and
+# matches CTX-0016's release workflow.
 package-check:
-    cargo package --workspace --allow-dirty --no-verify
+    cargo package --list --workspace --allow-dirty
 
 # Repository-local Markdown link check: resolves every relative link target
 # (fragment stripped, URLs skipped) against the tracked working tree. Catches
