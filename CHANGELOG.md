@@ -1,3 +1,80 @@
+# Changelog
+
+All notable changes to Phodopus are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+Phodopus restarts the version line at `0.0.1`; the Piccolo entries inherited
+from the upstream fork are preserved verbatim under
+[Piccolo lineage (inherited)](#piccolo-lineage-inherited).
+
+## [Unreleased]
+
+### Changed
+
+- Aligned the workspace and both crate versions to `0.2.0-alpha.1`, the
+  pre-release of the `v0.2.0` milestone, so the Git tag, release title, and
+  manifest version are identical.
+- Marked `phodopus` and `phodopus-util` intentionally non-publishable
+  (`publish = false`) and documented the source-only distribution model,
+  because `gc-arena` is pinned to a revision that is not published on
+  crates.io.
+
+### Added
+
+- `release.toml`: release policy for version identity, the `v<version>` tag
+  convention, and source-package reproducibility verification.
+- `.github/workflows/release.yml`: verifies tag/manifest version identity,
+  builds from the tagged tree, and attaches a reproducible source archive plus
+  a package file manifest and checksums to the release.
+
+## [0.1.0] - 2026-09-20
+
+Development release (Phases 1 and 1.5). The Git tag was `v0.1.0` while the
+manifests declared the pre-release `0.1.0-alpha.1`; that mismatch is fixed from
+`0.2.0-alpha.1` onward. This section records the tagged content.
+
+### Added
+
+- `base`: sandboxed, strictly text-only `load` with isolated `_ENV` and a
+  global `_G`; precompiled bytecode injection is rejected.
+- `string`: `pack`, `unpack`, and `packsize` (Lua 5.3 binary packing) with
+  checked arithmetic and 16 MiB ceilings.
+- `string`: `rep` with checked arithmetic and a 16 MiB allocation ceiling.
+- `string`: method-call syntax via a `string` metatable
+  (`("hello"):upper()`).
+- `string`: native Lua pattern matching (`find`, `match`, `gsub`) and
+  `string.format`.
+- `utf8`: standard Lua 5.4 UTF-8 module.
+- `debug`: error backtraces via `debug.traceback`.
+
+### Fixed
+
+- `vm`: unprovided function parameters evaluate strictly to `nil`, matching
+  PUC-Rio Lua; documented the call-stack frame layout and invariance.
+
+### Documentation
+
+- Recorded the Bitty dependency relationship and `bitty-lua` host ABI boundary
+  under `docs/integration/`.
+
+## [0.0.1] - 2026-09-19
+
+Initial Phodopus runtime baseline.
+
+### Added
+
+- Multi-crate workspace layout under `crates/` (`phodopus`,
+  `phodopus-util`), preserving upstream history and dual MIT/CC0 licensing.
+- Modern dependency baseline (`rand 0.9`, `thiserror 2.0`, `anyhow 1.0`,
+  `serde 1.0`, `clap 4.6`) and MSRV 1.85 enforcement.
+- Cross-platform CI (Linux, macOS, Windows) and pinned Rust toolchain.
+
+## Piccolo lineage (inherited)
+
+The entries below are inherited verbatim from the upstream Piccolo project this
+runtime was forked from; they are not Phodopus releases.
+
 ## [0.3.3]
 
 * Bugfix to not reset live threads held in upvalues of dead threads.

@@ -9,7 +9,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.1.0-alpha.1"
+version = "0.2.0-alpha.1"
 edition = "2024"
 rust-version = "1.85"
 authors = ["kyren <catherine@kyju.org>", "The Bitty Terminal Developers"]
@@ -28,5 +28,5 @@ serde = "1.0"
 thiserror = "2.0"
 lsonar = "0.2.4"
 
-phodopus = { path = "crates/phodopus", version = "0.1.0-alpha.1" }
-phodopus-util = { path = "crates/phodopus-util", version = "0.1.0-alpha.1" }
+phodopus = { path = "crates/phodopus", version = "0.2.0-alpha.1" }
+phodopus-util = { path = "crates/phodopus-util", version = "0.2.0-alpha.1" }
