@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
 
-use phodopus::table::InvalidTableKey;
+use phodopus::table::{InvalidTableKey, TableError};
 use phodopus::{Lua, Table, Value};
 
 #[test]
@@ -58,15 +58,15 @@ fn invalid_keys_are_rejected() {
 
         assert!(matches!(
             table.set(ctx, Value::Nil, 1),
-            Err(InvalidTableKey::IsNil)
+            Err(TableError::Key(InvalidTableKey::IsNil))
         ));
         assert!(matches!(
             table.set(ctx, f64::NAN, 1),
-            Err(InvalidTableKey::IsNaN)
+            Err(TableError::Key(InvalidTableKey::IsNaN))
         ));
         assert!(matches!(
             table.set(ctx, Value::Nil, Value::Nil),
-            Err(InvalidTableKey::IsNil)
+            Err(TableError::Key(InvalidTableKey::IsNil))
         ));
 
         assert!(matches!(table.get_value(ctx, Value::Nil), Value::Nil));

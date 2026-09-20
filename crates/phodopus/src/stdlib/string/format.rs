@@ -111,6 +111,11 @@ impl<'gc> Sequence<'gc> for FormatSequence<'gc> {
                     sandbox::checked_output_growth(res.len(), chunk_len).ok_or_else(|| {
                         Error::from_value("resulting string too large".into_value(ctx))
                     })?;
+                    // Charge the projected output buffer against the hard memory quota as well as
+                    // the 16 MiB ceiling, matching `string.rep`. Without this, a hostile format
+                    // could build a multi-megabyte buffer and only be refused at the execution
+                    // boundary once it was interned into the arena.
+                    ctx.check_memory(res.len().saturating_add(chunk_len))?;
                     res.push_str(&remaining[..chunk_len]);
                     fuel.consume(sandbox::output_cost(chunk_len));
                     *verbatim_offset += chunk_len;
@@ -122,6 +127,7 @@ impl<'gc> Sequence<'gc> for FormatSequence<'gc> {
                                 "resulting string too large".into_value(ctx),
                             ));
                         }
+                        ctx.check_memory(res.len().saturating_add(1))?;
                         res.push('%');
                         fuel.consume(FUEL_PER_FORMAT_DIRECTIVE);
                         *element_index += 1;
@@ -146,6 +152,7 @@ impl<'gc> Sequence<'gc> for FormatSequence<'gc> {
                             "resulting string too large".into_value(ctx),
                         ));
                     }
+                    ctx.check_memory(res.len().saturating_add(expansion.len()))?;
                     res.push_str(&expansion);
                     fuel.consume(
                         FUEL_PER_FORMAT_DIRECTIVE

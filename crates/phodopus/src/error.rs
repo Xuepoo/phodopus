@@ -288,18 +288,20 @@ impl<'gc> Error<'gc> {
                 impl<'gc> Singleton<'gc> for UDMeta<'gc> {
                     fn create(ctx: Context<'gc>) -> Self {
                         let table = Table::new(&ctx);
-                        table
-                            .set(
-                                ctx,
-                                MetaMethod::ToString,
-                                Callback::from_fn(&ctx, |ctx, _, mut stack| {
-                                    let ud = stack.consume::<UserData>(ctx)?;
-                                    let error = ud.downcast_static::<RuntimeError>()?;
-                                    stack.replace(ctx, error.error.to_string());
-                                    Ok(CallbackReturn::Return)
-                                }),
-                            )
-                            .unwrap();
+                        // The `__tostring` field is presentation-only. This runs while converting a
+                        // runtime error (for example into a `pcall` error value), which can happen
+                        // under hard-quota pressure; a refused field write must degrade the error
+                        // display, never panic and mask the original error.
+                        let _ = table.set(
+                            ctx,
+                            MetaMethod::ToString,
+                            Callback::from_fn(&ctx, |ctx, _, mut stack| {
+                                let ud = stack.consume::<UserData>(ctx)?;
+                                let error = ud.downcast_static::<RuntimeError>()?;
+                                stack.replace(ctx, error.error.to_string());
+                                Ok(CallbackReturn::Return)
+                            }),
+                        );
                         Self(table)
                     }
                 }

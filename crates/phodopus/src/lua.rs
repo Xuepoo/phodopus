@@ -1,4 +1,4 @@
-use std::ops;
+use std::{ops, rc::Rc};
 
 use gc_arena::{
     Arena, Collect, Mutation, Rootable,
@@ -7,9 +7,11 @@ use gc_arena::{
 };
 
 use crate::{
-    Error, ExternError, FromMultiValue, FromValue, Fuel, IntoValue, Registry, RuntimeError,
-    Singleton, StashedExecutor, String, Table, TypeError, Value,
+    Error, ExternError, FromMultiValue, FromValue, Fuel, FuelExhausted, IntoValue, OutOfMemory,
+    Registry, RuntimeError, Singleton, StashedExecutor, String, Table, TableError, TypeError,
+    Value,
     finalizers::Finalizers,
+    memory::MemoryLimit,
     stash::{Fetchable, Stashable},
     stdlib::{
         ModuleConfig, load_base, load_coroutine, load_debug, load_io, load_load_text, load_math,
@@ -59,6 +61,29 @@ impl<'gc> Context<'gc> {
         self.mutation
     }
 
+    /// The shared hard memory quota for this `Lua` instance.
+    pub fn memory_limit(self) -> &'gc MemoryLimit {
+        &self.state.memory_limit
+    }
+
+    /// Refuse `additional` more bytes unless the arena has room under the configured quota.
+    ///
+    /// Callers invoke this *before* growing a Lua-controlled collection (table array/map, large
+    /// string buffer). It returns a typed [`OutOfMemory`] without allocating, so a refused request
+    /// can never abort the process or leave a partially initialized value. See the scope note in
+    /// `docs/specifications/sandbox-and-fuel.md` §4.2 for exactly which allocations are covered.
+    pub fn check_memory(self, additional: usize) -> Result<(), OutOfMemory> {
+        let current = self.metrics().total_allocation();
+        self.memory_limit().check(current, additional)
+    }
+
+    /// Record the arena's current allocation into the quota and report whether it is over the
+    /// ceiling. Does not refuse; used at GC boundaries where allocation already happened.
+    pub fn observe_memory(self) -> bool {
+        self.memory_limit()
+            .observe(self.metrics().total_allocation())
+    }
+
     pub fn globals(self) -> Table<'gc> {
         self.state.globals
     }
@@ -92,6 +117,16 @@ impl<'gc> Context<'gc> {
     // Calls `ctx.globals().set_field(key, value)`
     pub fn set_global<V: IntoValue<'gc>>(self, key: &'static str, value: V) -> Value<'gc> {
         self.state.globals.set_field(self, key, value)
+    }
+
+    /// Fallible variant of [`Context::set_global`] that returns a typed refusal instead of
+    /// panicking when a hard memory quota is installed and the write would cross it.
+    pub fn try_set_global<V: IntoValue<'gc>>(
+        self,
+        key: &'static str,
+        value: V,
+    ) -> Result<Value<'gc>, TableError> {
+        self.state.globals.try_set_field(self, key, value)
     }
 
     /// Calls `ctx.registry().singleton::<S>(ctx)`.
@@ -138,6 +173,8 @@ impl<'gc> ops::Deref for Context<'gc> {
 /// to create a `Lua` instance.
 pub struct Lua {
     arena: Arena<Rootable![State<'_>]>,
+    memory_limit: Rc<MemoryLimit>,
+    fuel_limit: Option<i32>,
 }
 
 impl Default for Lua {
@@ -147,21 +184,132 @@ impl Default for Lua {
 }
 
 impl Lua {
-    /// Start building a `Lua` instance with an explicit module configuration.
+    /// Start building a `Lua` instance with an explicit module configuration and explicit resource
+    /// limits.
     ///
-    /// This is the embedder hook for the sandboxed module system: virtual roots
+    /// This is the embedder hook for the sandboxed module system (virtual roots
     /// and compiled-in modules are injected here, never discovered from the
-    /// host filesystem. The default builder produces the same preload-only
-    /// configuration as [`Lua::core`].
+    /// host filesystem) and for the hard resource ceilings: see
+    /// [`RuntimeBuilder::fuel_limit`] and [`RuntimeBuilder::memory_limit`].
+    /// The default builder produces the same preload-only configuration as
+    /// [`Lua::core`] with no limits.
     pub fn builder() -> LuaBuilder {
         LuaBuilder::new()
     }
 
     /// Create a new `Lua` instance with no parts of the stdlib loaded.
     pub fn empty() -> Self {
+        let memory_limit = Rc::new(MemoryLimit::default());
+        let limit = memory_limit.clone();
         Lua {
-            arena: Arena::<Rootable![State<'_>]>::new(|mc| State::new(mc)),
+            arena: Arena::<Rootable![State<'_>]>::new(|mc| State::new(mc, limit)),
+            memory_limit,
+            fuel_limit: None,
         }
+    }
+
+    /// The shared hard memory quota for this instance.
+    pub fn memory_limit(&self) -> &MemoryLimit {
+        &self.memory_limit
+    }
+
+    /// The runtime's default execution Fuel budget, if one was configured.
+    ///
+    /// Set through [`RuntimeBuilder::fuel_limit`]; used by [`Lua::execute`] and
+    /// [`Lua::execute_with_fuel`] when the caller does not pass an explicit budget.
+    pub fn fuel_limit(&self) -> Option<i32> {
+        self.fuel_limit
+    }
+
+    /// Install (or clear) the default execution Fuel budget.
+    pub fn set_fuel_limit(&mut self, fuel: Option<i32>) {
+        self.fuel_limit = fuel;
+    }
+
+    /// Install (or clear) the hard heap ceiling.
+    ///
+    /// This is the post-construction hook used by [`RuntimeBuilder::build`] to apply the quota
+    /// *after* the trusted core standard library has been loaded, so the fixed stdlib footprint
+    /// does not count against the script's budget. Setting a ceiling below the current tracked
+    /// allocation is allowed and refuses the next checked allocation.
+    pub fn set_memory_limit(&mut self, bytes: Option<usize>) {
+        self.memory_limit.set_max_bytes(bytes);
+    }
+
+    /// Record the current tracked allocation without collecting.
+    pub fn memory_used(&self) -> usize {
+        self.memory_limit.current_bytes()
+    }
+
+    /// Whether the quota has refused an allocation since it was last cleared.
+    pub fn memory_limit_exceeded(&self) -> bool {
+        self.memory_limit.is_exceeded()
+    }
+
+    /// Attempt to reclaim memory with a full collection when the arena is at or above its quota,
+    /// then report whether it remains over the ceiling.
+    ///
+    /// `gc-arena` forbids collection while the arena is mutably borrowed, so this is only callable
+    /// between `Lua::enter` calls. It is invoked automatically between executor steps so that a
+    /// script that crosses the ceiling triggers an immediate incremental collection before any
+    /// further allocation is considered.
+    fn collect_on_quota_pressure(&mut self) {
+        let Some(max) = self.memory_limit.max_bytes() else {
+            return;
+        };
+        if self.arena.metrics().total_allocation() >= max {
+            self.collect_all_preserving_finalizers();
+        }
+    }
+
+    /// Collect the whole arena, running finalizers, and refresh the observed quota.
+    fn collect_all_preserving_finalizers(&mut self) {
+        if self.arena.collection_phase() != CollectionPhase::Sweeping {
+            if let Some(marked) = self.arena.mark_all() {
+                marked.finalize(|fc, root| {
+                    root.finalizers.prepare(fc);
+                });
+            }
+            if let Some(marked) = self.arena.mark_all() {
+                marked.finalize(|fc, root| {
+                    root.finalizers.finalize(fc);
+                });
+            }
+        }
+        self.arena.collect_all();
+        self.memory_limit
+            .observe(self.arena.metrics().total_allocation());
+    }
+
+    /// Enforce the hard memory quota outside of arena mutation.
+    ///
+    /// If the tracked allocation is over the ceiling, a full collection is attempted; if the
+    /// arena still exceeds the ceiling afterwards, a typed [`OutOfMemory`] is returned. This is
+    /// the host-visible enforcement point that complements the per-allocation checks performed
+    /// inside Lua table and string operations.
+    pub fn enforce_memory_limit(&mut self) -> Result<(), OutOfMemory> {
+        let Some(max) = self.memory_limit.max_bytes() else {
+            return Ok(());
+        };
+
+        let mut current = self.arena.metrics().total_allocation();
+        self.memory_limit.observe(current);
+        if current <= max {
+            return Ok(());
+        }
+
+        self.collect_all_preserving_finalizers();
+        current = self.arena.metrics().total_allocation();
+        self.memory_limit.observe(current);
+        if current <= max {
+            return Ok(());
+        }
+
+        Err(OutOfMemory {
+            requested: current,
+            limit: max,
+            current,
+        })
     }
 
     /// Create a new `Lua` instance with the core stdlib loaded.
@@ -317,7 +465,8 @@ impl Lua {
     /// Run the given executor to completion.
     ///
     /// This will periodically exit the arena in order to collect garbage concurrently with running
-    /// Lua code.
+    /// Lua code. If a hard memory quota is configured, the arena is checked between steps and a
+    /// collection is triggered when it is at or above the ceiling.
     pub fn finish(&mut self, executor: &StashedExecutor) -> Result<(), BadThreadMode> {
         const FUEL_PER_GC: i32 = 4096;
 
@@ -327,6 +476,11 @@ impl Lua {
             if self.enter(|ctx| ctx.fetch(executor).step(ctx, &mut fuel))? {
                 break;
             }
+
+            // Between steps the arena is not mutably borrowed, so a collection is legal. Do it
+            // eagerly when the hard quota is at or above its ceiling so garbage is reclaimed
+            // before the next allocation is considered.
+            self.collect_on_quota_pressure();
         }
 
         Ok(())
@@ -335,12 +489,63 @@ impl Lua {
     /// Run the given executor to completion and then take return values from the returning thread.
     ///
     /// This is equivalent to calling `Lua::finish` on an executor and then calling
-    /// `Executor::take_result` yourself.
+    /// `Executor::take_result` yourself. When a runtime Fuel budget is configured through
+    /// [`RuntimeBuilder::fuel_limit`], it is enforced as a *total* budget for this call: a
+    /// [`FuelExhausted`] error is returned if the script does not finish first.
     pub fn execute<R: for<'gc> FromMultiValue<'gc>>(
         &mut self,
         executor: &StashedExecutor,
     ) -> Result<R, ExternError> {
-        self.finish(executor).map_err(RuntimeError::new)?;
+        if let Some(budget) = self.fuel_limit {
+            self.execute_with_fuel(executor, Fuel::with(budget))
+        } else {
+            self.execute_with_fuel(executor, Fuel::with(i32::MAX))
+        }
+    }
+
+    /// Run the given executor to completion with an explicit total Fuel budget.
+    ///
+    /// `fuel` is a single budget carried across every internal slice: it is refilled between
+    /// garbage-collection boundaries but its remaining amount keeps decreasing, so the script
+    /// stops when the total is consumed. This is the replenishment hook from the sandbox
+    /// verification plan: to resume an interrupted executor, call this again with a refreshed
+    /// budget, since the executor state is preserved across calls.
+    ///
+    /// A hard memory quota is enforced host-visibly before return values are taken, so a script
+    /// that returned while the arena was over its ceiling yields a typed [`OutOfMemory`].
+    pub fn execute_with_fuel<R: for<'gc> FromMultiValue<'gc>>(
+        &mut self,
+        executor: &StashedExecutor,
+        fuel: Fuel,
+    ) -> Result<R, ExternError> {
+        const FUEL_PER_GC: i32 = 4096;
+
+        let initial = fuel.remaining();
+        let mut remaining = initial;
+        loop {
+            // Step with a bounded slice (carrying no more than the total budget still available),
+            // then subtract what this slice consumed from the running total. This keeps the
+            // configured budget a total rather than per-slice while still letting collection run
+            // between steps.
+            let slice = remaining.clamp(1, FUEL_PER_GC);
+            let mut slice_fuel = Fuel::with(slice);
+            let done = self
+                .enter(|ctx| ctx.fetch(executor).step(ctx, &mut slice_fuel))
+                .map_err(RuntimeError::new)?;
+            remaining -= slice - slice_fuel.remaining();
+
+            if done {
+                break;
+            }
+            if remaining <= 0 {
+                return Err(ExternError::from(RuntimeError::new(FuelExhausted {
+                    limit: initial,
+                })));
+            }
+            self.collect_on_quota_pressure();
+        }
+
+        self.enforce_memory_limit().map_err(RuntimeError::new)?;
         self.try_enter(|ctx| ctx.fetch(executor).take_result::<R>(ctx)?)
     }
 }
@@ -354,7 +559,16 @@ impl Lua {
 pub struct LuaBuilder {
     module_config: ModuleConfig,
     full: bool,
+    fuel_limit: Option<i32>,
+    memory_limit: Option<usize>,
 }
+
+/// The host-facing builder for a [`Lua`] runtime.
+///
+/// This is the name used by the sandbox specification's acceptance criteria
+/// ([`RuntimeBuilder::fuel_limit`], [`RuntimeBuilder::memory_limit`]). It is the same builder
+/// returned by [`Lua::builder`] and aliased to [`LuaBuilder`] so existing code keeps compiling.
+pub type RuntimeBuilder = LuaBuilder;
 
 impl LuaBuilder {
     fn new() -> Self {
@@ -389,24 +603,56 @@ impl LuaBuilder {
         self
     }
 
-    /// Also load the I/O stdlib (equivalent to [`Lua::full`]).
+    /// Also load the I/O stdlib (equivalent to [`Lua`]'s `full` constructor).
     pub fn with_io(&mut self) -> &mut Self {
         self.full = true;
         self
     }
 
+    /// Set the hard heap allocation ceiling for the runtime, in bytes.
+    ///
+    /// This is `RuntimeBuilder::memory_limit` from the sandbox specification. Once the runtime is
+    /// built, any allocation that would push total tracked heap usage above `bytes` is refused with
+    /// a clean [`OutOfMemory`] error; an incremental collection is attempted first so garbage is
+    /// reclaimed before the runtime gives up. `0` is a valid hard ceiling (only an empty runtime
+    /// can run). The quota applies to script-time allocation; the trusted core standard library
+    /// loaded during construction is not charged against it.
+    pub fn memory_limit(&mut self, bytes: usize) -> &mut Self {
+        self.memory_limit = Some(bytes);
+        self
+    }
+
+    /// Set the default execution Fuel budget for the runtime, in instruction units.
+    ///
+    /// This is `RuntimeBuilder::fuel_limit` from the sandbox specification. The budget is exposed
+    /// through [`Lua::fuel_limit`] and applied by [`Lua::execute`]/[`Lua::execute_with_fuel`]
+    /// unless the caller supplies an explicit budget. A non-positive budget is stored verbatim and
+    /// causes any execution to interrupt immediately.
+    pub fn fuel_limit(&mut self, fuel: i32) -> &mut Self {
+        self.fuel_limit = Some(fuel);
+        self
+    }
+
     /// Consume the builder and produce a configured `Lua` instance.
+    ///
+    /// The core standard library is loaded first, then the hard memory quota is installed. This
+    /// ordering is deliberate: the fixed, trusted runtime footprint is not charged against the
+    /// script's quota, so a modest quota does not make the runtime unusable before any script runs.
     pub fn build(&self) -> Lua {
         let mut lua = Lua::empty();
         lua.load_core_with(&self.module_config);
         if self.full {
             lua.load_io();
         }
+        lua.fuel_limit = self.fuel_limit;
+        lua.set_memory_limit(self.memory_limit);
+        // Seed the observed counter so `Lua::memory_used` is meaningful immediately.
+        lua.enter(|ctx| ctx.observe_memory());
         lua
     }
 }
 
-#[derive(Copy, Clone, Collect)]
+#[derive(Collect)]
 #[collect(no_drop)]
 struct State<'gc> {
     globals: Table<'gc>,
@@ -414,16 +660,18 @@ struct State<'gc> {
     strings: InternedStringSet<'gc>,
     finalizers: Finalizers<'gc>,
     string_metatable: Table<'gc>,
+    memory_limit: Rc<MemoryLimit>,
 }
 
 impl<'gc> State<'gc> {
-    fn new(mc: &Mutation<'gc>) -> State<'gc> {
+    fn new(mc: &Mutation<'gc>, memory_limit: Rc<MemoryLimit>) -> State<'gc> {
         Self {
             globals: Table::new(mc),
             registry: Registry::new(mc),
             strings: InternedStringSet::new(mc),
             finalizers: Finalizers::new(mc),
             string_metatable: Table::new(mc),
+            memory_limit,
         }
     }
 

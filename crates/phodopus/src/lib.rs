@@ -11,6 +11,7 @@ pub mod fuel;
 pub mod function;
 pub mod io;
 pub mod lua;
+pub mod memory;
 pub mod meta_ops;
 pub mod opcode;
 pub mod registry;
@@ -31,9 +32,10 @@ pub use self::{
     constant::Constant,
     conversion::{FromMultiValue, FromValue, IntoMultiValue, IntoValue, Variadic},
     error::{Error, ExternError, RuntimeError, TypeError},
-    fuel::Fuel,
+    fuel::{Fuel, FuelExhausted},
     function::Function,
-    lua::{Context, Lua},
+    lua::{Context, Lua, LuaBuilder, RuntimeBuilder},
+    memory::{MemoryLimit, OutOfMemory},
     meta_ops::MetaMethod,
     registry::{Registry, Singleton},
     stack::Stack,
@@ -42,7 +44,7 @@ pub use self::{
         StashedString, StashedTable, StashedThread, StashedUserData, StashedValue,
     },
     string::String,
-    table::Table,
+    table::{Table, TableError},
     thread::{Execution, Executor, ExecutorMode, Thread, ThreadMode},
     userdata::UserData,
     value::Value,

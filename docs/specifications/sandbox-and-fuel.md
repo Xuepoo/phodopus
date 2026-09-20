@@ -12,7 +12,7 @@ sidebar_order: 21
 
 # Sandbox & Fuel Specification
 
-> Status: Design **accepted** | Implementation: **partial** (Fuel instruction budgeting implemented; hard heap allocation quotas planned). This document defines the normative resource bounding, instruction Fuel budgeting, and hard memory quota contracts for Phodopus.
+> Status: Design **accepted** | Implementation: **partial** (Fuel instruction budgeting and the hard heap quota with OOM recovery are implemented; the quota is enforced at the runtime-controlled allocation boundaries rather than inside `gc-arena`'s internal allocator, see §4.2). This document defines the normative resource bounding, instruction Fuel budgeting, and hard memory quota contracts for Phodopus.
 
 ---
 
@@ -22,7 +22,7 @@ sidebar_order: 21
 
 - Instruction Fuel accounting rules across VM bytecode opcodes and sequence polling.
 - Preemption semantics when Fuel is exhausted (`ExecutorMode::Interrupted`).
-- Hard memory allocation ceilings enforced by the allocator.
+- Hard memory allocation ceilings enforced before runtime-controlled allocations.
 - Out-of-memory (OOM) error handling without VM panics or memory corruption.
 - API surface for setting and replenishing Fuel and memory limits.
 
@@ -45,7 +45,7 @@ This specification must not weaken:
 ## 3. Terminology
 
 - **Fuel**: An abstract, deterministic unit of execution work roughly corresponding to one bytecode instruction or atomic VM operation.
-- **Hard Memory Quota**: An absolute byte ceiling on total heap allocations within a `gc-arena` instance.
+- **Hard Memory Quota**: An absolute byte ceiling on tracked heap allocations within a `gc-arena` instance, enforced before runtime-controlled allocation and at execution boundaries.
 - **Interrupted Mode**: A clean VM state where execution pauses because Fuel has reached zero, preserving the entire frame stack for subsequent resumption.
 
 ---
@@ -153,27 +153,75 @@ overclaiming.
 
 ### 4.2 Hard Memory Ceilings (`MemoryQuota`)
 
-> Status: **planned (not implemented)**. The allocator-side hard quota is the
-> subject of the separate memory-quota task. Until it lands, the only VM-wide
-> bound is the per-operation checked ceiling described in §4.1.2; the
-> observational `Lua::total_memory()` API does not enforce anything.
+> Status: **implemented (runtime-boundary enforcement)**. `RuntimeBuilder::memory_limit(bytes)`
+> installs a hard ceiling; `Lua::total_memory()` remains the observational API. See the honest
+> scope note at the end of this section for the exact boundary.
 
-Memory allocation within `gc-arena` utilizes a custom allocator tracking allocated bytes against a hard limit:
+The quota is tracked against the byte count `gc-arena` already reports for the arena (`Metrics`),
+with a hard ceiling layered on top:
 
 ```rust
 pub struct MemoryLimit {
-    max_bytes: usize,
+    max_bytes: Option<usize>,
     current_bytes: usize,
 }
 ```
 
 1. **Quota Enforcement**:
-   - Before any allocation or reallocation in the GC heap, the allocator checks if `current_bytes + requested <= max_bytes`.
-   - If exceeded, an incremental GC cycle is immediately attempted.
-   - If memory remains insufficient after collection, allocation fails and returns `Err(RuntimeError::OutOfMemory)`.
+   - A quota check runs immediately before the runtime allocates one of the quota-controlled
+     collections: a Lua table constructor's initial array/map capacity (`{...}`, via
+     `Table::try_new`), every later table array/map growth, a `..` / `table.concat` result buffer,
+     a closure created by the `Closure` opcode (via `Closure::try_from_parts`), and large
+     standard-library string buffers such as `string.rep`, `string.format`, and `string.gsub`. It
+     computes the byte request with checked arithmetic and refuses if
+     `current_bytes + requested > max_bytes` (see `crates/phodopus/src/memory.rs`,
+     `crates/phodopus/src/table/raw.rs`, `crates/phodopus/src/closure.rs`, and
+     `crates/phodopus/src/meta_ops.rs`).
+   - When the arena reaches the ceiling at a GC boundary, a full incremental collection is run
+     before execution continues, so garbage is reclaimed before the runtime gives up.
+   - If memory remains insufficient after collection, the operation fails with a clean
+     `OutOfMemory` error carried by `RuntimeError`; no native abort or `handle_alloc_error` is
+     reachable from the quota path.
 2. **Error Safety**:
    - The VM frames, tables, and threads remain consistent upon OOM; no partially-initialized values leak into the heap.
    - OOM errors can be caught via `pcall` if sufficient recovery memory remains, or propagated cleanly to the host.
+   - A refused table or string operation leaves the target collection unchanged; `pcall` observes a
+     normal error value and execution continues.
+
+**Enforcement points (honest scope).** Phodopus `gc-arena 0.5.3` does not route `Gc`-box
+allocations through an application allocator, so a quota cannot literally intercept every internal
+`Gc::new`. The quota is therefore enforced at the boundaries Phodopus controls, each checked
+_before_ the allocation that would cross the ceiling:
+
+- the `{...}` table constructor, charged for its initial array and map capacity before either part
+  is allocated (`Table::try_new`, called from the `NewTable` opcode);
+- every subsequent table array/map growth, charged for the amortized growth request before the
+  fallible reserve;
+- the `..` operator and `table.concat`, charged for the projected result size before the result
+  buffer is allocated;
+- every closure created by the `Closure` opcode, charged for its `Gc`-boxed `ClosureInner` and
+  upvalue vector before the box is allocated (`Closure::try_from_parts`), which is what refuses a
+  retained closure chain (`root = wrap(root)`, where `wrap` captures its argument) at the ceiling;
+- large standard-library string buffers such as `string.rep`, `string.format`, and `string.gsub`.
+
+The whole arena is additionally checked and collected at execution boundaries. Together these
+refuse the documented Denial-of-Service constructs with a recoverable typed `OutOfMemory`: the
+`{t}` constructor chain (`local t = {}; while true do t = {t} end`), unbounded string growth
+(`s = s .. s`), and a _retained_ closure chain (`root = wrap(root)`, where each `wrap` result keeps
+the previous closure reachable) that cannot be collected. The unrooted forms of the table and
+string constructs are refused as well; unrooted closure-per-iteration allocation is instead
+reclaimed at the GC boundary, since the intermediate closures are unreachable.
+
+What remains outside the per-allocation check is the allocation that happens _inside_ an already
+charged operation and the arena's internal bookkeeping. `gc-arena 0.5.3` does not route `Gc`-box
+allocation through an application allocator, so the upvalue `Gc` boxes read by the `Closure`
+opcode, interned-string nodes, and the `Gc` box headers themselves are not each refused
+individually: the requesting operation is charged before it runs, and the next checked allocation
+or the GC-boundary check rejects once the tracked total reaches the ceiling. The residual
+unchecked growth per step is therefore bounded by the size of those internal nodes rather than
+being an unbounded chain; a future `gc-arena` upgrade or compatibility fork (see
+[Garbage Collector Strategy](../architecture/gc-strategy.md)) may move the check into the internal
+allocator itself.
 
 ---
 
@@ -190,13 +238,15 @@ pub struct MemoryLimit {
 2. **Replenishment Test**: Replenish 20,000 Fuel to an interrupted VM; assert execution resumes and advances.
 3. **Variable-Cost Interruption Tests** (`crates/phodopus/tests/fuel_stdlib.rs`): under a small Fuel budget, assert `string.format`, `string.gsub`, `utf8.len`, and `string.pack`/`unpack` are interrupted at least once and produce the same result as an uninterrupted run (state preserved and resumable).
 4. **Checked Output Ceiling Tests**: assert a hostile `string.format "%s%s"` over 16 MiB and a hostile `gsub` replacement over 16 MiB both fail via `pcall` with `"resulting string too large"` and no allocation blowup.
-5. **Memory Ceiling Test** (planned): configure an 8 MiB quota; allocate large string arrays; assert clean `OutOfMemory` error without native abort or memory corruption.
+5. **Memory Ceiling Test** (`crates/phodopus/tests/memory_quota.rs`): configure an 8 MiB quota; allocate large string arrays and grow large tables; assert a clean `OutOfMemory` error without native abort or memory corruption.
+6. **OOM Recovery Tests** (`crates/phodopus/tests/memory_quota.rs`): assert `pcall` catches a quota refusal while recovery memory remains, the runtime is usable afterwards, a low quota refuses allocation (not merely measures it), and the `OutOfMemory` payload is reachable through the host error chain.
+7. **DoS Construct Refusal Tests** (`crates/phodopus/tests/memory_quota.rs`): under a small quota, assert the `{t}` table-constructor chain (rooted and unrooted) and repeated `..` / `table.concat` growth are refused with a typed `OutOfMemory` and no panic or abort, and that the tracked total stays bounded at the ceiling.
 
 ---
 
 ## 7. Acceptance Criteria
 
 - Every standard library callback either consumes proportional Fuel or is proven constant-bounded with a documented justification (§4.1.1, §4.1.3).
-- `RuntimeBuilder::fuel_limit(n)` and `RuntimeBuilder::memory_limit(bytes)` configure strict runtime limits. _(Fuel limit is available on `Fuel`; the builder-level APIs remain part of the memory-quota work.)_
+- `RuntimeBuilder::fuel_limit(n)` and `RuntimeBuilder::memory_limit(bytes)` configure strict runtime limits. `RuntimeBuilder` is the host-facing alias of `LuaBuilder`, reached through `Lua::builder()`. The memory limit installs a hard heap ceiling (checked before table constructors, table growth, `..`/`table.concat` result buffers, and large string buffers, with GC-on-exceed and a typed `OutOfMemory`); the fuel limit is a total per-execution budget enforced by `Lua::execute` and replenished through `Lua::execute_with_fuel`.
 - Zero occurrences of native panics when scripts exceed execution bounds.
 - Unit and integration tests covering Fuel exhaustion, variable-cost interruption, checked output ceilings, and OOM recovery pass 100% green.
