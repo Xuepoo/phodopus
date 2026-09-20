@@ -45,7 +45,7 @@ This specification must not weaken:
 ## 3. Terminology
 
 - **Fuel**: An abstract, deterministic unit of execution work roughly corresponding to one bytecode instruction or atomic VM operation.
-- **Hard Memory Quota**: An absolute byte ceiling on tracked heap allocations within a `gc-arena` instance, enforced by an executor-loop chokepoint after every executor iteration and by per-site pre-allocation checks, with a maximum overshoot of one executor iteration.
+- **Hard Memory Quota**: An absolute byte ceiling on tracked heap allocations within a `gc-arena` instance, enforced by per-site pre-allocation checks plus an executor-loop chokepoint after every executor iteration, with a maximum overshoot of one quota-capped single-iteration allocation above the ceiling (measured worst case ≤ 2× quota at 32 KiB and above; quotas below the ~25 KiB runtime baseline refuse at baseline).
 - **Interrupted Mode**: A clean VM state where execution pauses because Fuel has reached zero, preserving the entire frame stack for subsequent resumption.
 
 ---
@@ -188,9 +188,14 @@ pub struct MemoryLimit {
      (see `crates/phodopus/src/memory.rs`, `crates/phodopus/src/table/raw.rs`,
      `crates/phodopus/src/closure.rs`, and `crates/phodopus/src/meta_ops.rs`). The listed operations
      are: a Lua table constructor's initial array/map capacity (`{...}`, via `Table::try_new`),
-     every later table array/map growth, a `..` / `table.concat` result buffer, a closure created by
-     the `Closure` opcode (via `Closure::try_from_parts`), and large standard-library string buffers
-     such as `string.rep`, `string.format`, and `string.gsub`.
+     every later table array/map growth, every `table.pack` / `table.unpack` sequence batch (capped
+     to the remaining quota before the thread-stack `reserve`, via
+     `stdlib/table.rs::cap_batch_for_quota`; the batch is shrunk to fit so execution keeps making
+     progress, and refused with a typed `OutOfMemory` only when not even one more element fits), a
+     `..` / `table.concat` result buffer, a closure created by
+     the `Closure` opcode (via `Closure::try_from_parts`), and large standard-library buffers
+     such as `string.rep`, `string.format`, `string.gsub`, `string.pack`, `string.char`, and
+     `utf8.char` (all native, GC-untracked Rust buffers, pre-checked before they grow).
    - When the arena is at or above the ceiling at a GC boundary, a full incremental collection is
      run before execution continues, so garbage is reclaimed before the runtime gives up.
    - If memory remains insufficient after collection, the operation fails with a clean
@@ -205,12 +210,36 @@ pub struct MemoryLimit {
    - A refused table or string operation leaves the target collection unchanged; `pcall` observes a
      normal error value and execution continues.
 
-**Overshoot bound (honest statement).** The executor chokepoint runs once per executor iteration, so
-the peak tracked allocation can exceed the ceiling by at most **one executor iteration**
-(`VM_GRANULARITY = 64` VM instructions), independent of how long the script runs. In practice the
-observed worst case is one geometric vector reallocation in the call-frame path (≈1.4× the quota at
-a 1 MiB ceiling, bounded above by 2× in the regression tests); the pre-chokepoint behavior was
-≈88× (deep recursion reached ~92 MiB at a 1 MiB quota). This is the documented, testable guarantee.
+**Overshoot bound (honest statement).** Enforcement is per-site pre-allocation refusal plus the
+executor chokepoint, which runs once per executor iteration. Because every quota-capped batch
+reserve stages at most the remaining quota, the largest single-iteration allocation is itself
+quota-capped, so the peak tracked allocation is bounded by the ceiling plus one geometric vector
+doubling. Measured worst case through the production `Lua::execute` path (which drives
+`Executor::step` with a bounded 4096-unit fuel slice):
+
+| Quota   | `table.unpack({}, 1, 4000000)` peak | Ratio |
+| ------- | ----------------------------------- | ----- |
+| 8 KiB   | refuses at baseline (~25 KiB)       | ~3.1× |
+| 32 KiB  | ~38 KiB                             | ~1.2× |
+| 256 KiB | ~497 KiB                            | ~1.9× |
+| 1 MiB   | ~1.02 MiB                           | ~1.0× |
+
+Deep non-tail Lua recursion (the construct with no per-site check) peaks at ≈1.4× quota at a
+1 MiB ceiling, bounded above by 2× in the regression tests; the pre-chokepoint behavior was ≈88×
+(deep recursion reached ~92 MiB at a 1 MiB quota). Quotas below the runtime's own baseline
+footprint (~25 KiB, observable via `Lua::total_memory` on a fresh quota-less instance) cannot run
+any script: the refusal fires at baseline, which is correct (the quota is unsatisfiable) rather
+than a bounded overshoot. This is the documented, testable guarantee.
+
+**Public-API caveat.** The bound above holds for the production `Lua::execute` /
+`Lua::execute_with_fuel` path, which steps with a bounded fuel slice (4096 units). A host that
+drives the public `Executor::step` directly with an unbounded fuel slice opts out of that
+slicing: one sequence poll can then stage up to one quota-capped batch (the remaining quota in
+slots) plus its vector doubling, which the chokepoint still refuses on the next iteration but
+which is bounded by the quota, not by the slice. Such a host must supply its own quota
+discipline (bounded slices, or a small quota it re-checks). The measured worst case with an
+`i32::MAX`-fuel slice is ≤ 3.2× quota (8 KiB quota, i.e. baseline refusal) and ≤ 2× at
+32 KiB and above — the same quota-capped bound, never the pre-fix unbounded behavior.
 
 **GC-boundary bound.** The chokepoint cannot collect, because `gc-arena` forbids collection while
 the arena is mutably borrowed; it can only refuse. Collection runs at the host boundary between
@@ -225,7 +254,7 @@ allocator itself, which would make the per-iteration bound tighter still.
 
 ## 5. Security Review
 
-- **Denial of Service Prevention**: Malicious scripts containing infinite loops (`while true do end`), memory-bomb constructs (`local t = {}; while true do t = {t} end`), or unbounded deep recursion (`local function f(n) return 1 + f(n + 1) end`) are constrained by the Fuel and Quota bounds: deep recursion is stopped by the executor-loop chokepoint with a bounded, per-iteration overshoot and a catchable `OutOfMemory`.
+- **Denial of Service Prevention**: Malicious scripts containing infinite loops (`while true do end`), memory-bomb constructs (`local t = {}; while true do t = {t} end`), sequence bombs (`table.unpack({}, 1, huge)`), or unbounded deep recursion (`local function f(n) return 1 + f(n + 1) end`) are constrained by the Fuel and Quota bounds: deep recursion is stopped by the executor-loop chokepoint and sequence bombs are stopped by the quota-capped batch reserve, both with a bounded, quota-capped overshoot and a catchable `OutOfMemory`.
 - **Determinism**: For a given Lua bytecode stream and input data, Fuel consumption is deterministic across platforms and execution environments.
 
 ---
@@ -240,12 +269,13 @@ allocator itself, which would make the per-iteration bound tighter still.
 6. **OOM Recovery Tests** (`crates/phodopus/tests/memory_quota.rs`): assert `pcall` catches a quota refusal, the runtime is usable afterwards, a low quota refuses allocation (not merely measures it), and the `OutOfMemory` payload is reachable through the host error chain.
 7. **DoS Construct Refusal Tests** (`crates/phodopus/tests/memory_quota.rs`): under a small quota, assert the `{t}` table-constructor chain (rooted and unrooted), repeated `..` / `table.concat` growth, and an unbounded retained-state loop are refused with a typed `OutOfMemory` and no panic or abort, and that the tracked total stays bounded at the ceiling.
 8. **Executor Chokepoint Tests** (`crates/phodopus/tests/memory_quota.rs`): under a 1 MiB quota, assert deep non-tail Lua recursion (`f(800000)`) is refused with a peak tracked allocation ≤ 2× the quota (the structural bound; the pre-chokepoint regression was ≈88×), that the recursion `OutOfMemory` is catchable through `pcall` with the instance usable afterwards, and that a retained-state-per-iteration loop is stopped.
+9. **Sequence-Bomb Batch-Cap Tests** (`crates/phodopus/tests/memory_quota.rs`): at 32 KiB and 256 KiB quotas, assert the `table.unpack({}, 1, 4000000)` bomb is refused with a typed `OutOfMemory` and a peak ≤ 2× quota, and that a feasible small unpack still succeeds (shrinking keeps progress).
 
 ---
 
 ## 7. Acceptance Criteria
 
 - Every standard library callback either consumes proportional Fuel or is proven constant-bounded with a documented justification (§4.1.1, §4.1.3).
-- `RuntimeBuilder::fuel_limit(n)` and `RuntimeBuilder::memory_limit(bytes)` configure strict runtime limits. `RuntimeBuilder` is the host-facing alias of `LuaBuilder`, reached through `Lua::builder()`. The memory limit installs a hard heap ceiling enforced by the executor-loop chokepoint after every executor iteration (bounding unchecked retained growth by one iteration) plus per-site pre-allocation checks for table constructors, table growth, `..`/`table.concat` result buffers, `Closure` allocation, and large string buffers, with GC-on-exceed and a typed, `pcall`-catchable `OutOfMemory`; the fuel limit is a total per-execution budget enforced by `Lua::execute` and replenished through `Lua::execute_with_fuel`.
+- `RuntimeBuilder::fuel_limit(n)` and `RuntimeBuilder::memory_limit(bytes)` configure strict runtime limits. `RuntimeBuilder` is the host-facing alias of `LuaBuilder`, reached through `Lua::builder()`. The memory limit installs a hard heap ceiling enforced by per-site pre-allocation checks (table constructors, table growth, `table.pack`/`table.unpack` batch caps, `..`/`table.concat` result buffers, `Closure` allocation, and large string buffers including `string.pack`, `string.char`, `utf8.char`, and `string.gsub`) plus the executor-loop chokepoint after every executor iteration (bounding the peak to the ceiling plus one quota-capped single-iteration allocation; measured ≤ 2× quota at 32 KiB and above), with GC-on-exceed and a typed, `pcall`-catchable `OutOfMemory`; the fuel limit is a total per-execution budget enforced by `Lua::execute` and replenished through `Lua::execute_with_fuel`.
 - Zero occurrences of native panics when scripts exceed execution bounds.
 - Unit and integration tests covering Fuel exhaustion, variable-cost interruption, checked output ceilings, and OOM recovery pass 100% green.

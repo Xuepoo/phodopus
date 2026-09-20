@@ -87,7 +87,8 @@ To reconcile sandbox guarantees with upstream progress, Phodopus adopts a four-s
 ┌──────────────────────────────────────────────────────────┐
 │ Stage 2: MemoryLimit quota enforcement (Landed)          │
 │ - Shared MemoryLimit keyed to gc-arena Metrics           │
-│ - Executor-loop chokepoint (<=1 VM iteration overshoot)  │
+│ - Executor-loop chokepoint + per-site checks (peak <=    │
+│   ceiling + one quota-capped single-iteration allocation) │
 │ - Fallible table/string growth + GC-on-exceed            │
 │ - Internal Gc-box allocation not checked individually    │
 └────────────────────────────┬─────────────────────────────┘
@@ -125,16 +126,21 @@ handle, the arena root, and every allocation-boundary check.
 
 Quota enforcement has two complementary layers:
 
-1. **A single executor-loop chokepoint.** The executor step loop checks the tracked total against
+1. **A single executor-loop chokepoint plus quota-capped batch reserves.** The executor step loop checks the tracked total against
    the ceiling after _every_ executor iteration (`crates/phodopus/src/thread/executor.rs`). This is
    the structural fix for the fact that `gc-arena 0.5.3` does not route internal `Gc`-box
    allocation through an application allocator: it covers every retained-growth path that has no
    per-site check, most importantly a deep Lua call chain. On the first excess it yields to the
    host boundary for a possible collection; if the excess survives to the next observation it
-   injects a typed `OutOfMemory` as a normal `Frame::Error`, which `pcall` can catch. The maximum
-   overshoot is therefore one executor iteration (`VM_GRANULARITY = 64` instructions); the observed
-   worst case is ≈1.4× quota at a 1 MiB ceiling (one geometric vector reallocation), versus the
-   pre-chokepoint ≈88×.
+   injects a typed `OutOfMemory` as a normal `Frame::Error`, which `pcall` can catch. Because
+   every batch reserve (`table.pack` / `table.unpack` via `stdlib/table.rs::cap_batch_for_quota`)
+   stages at most the remaining quota, the largest single-iteration allocation is itself
+   quota-capped: the peak is bounded by the ceiling plus one geometric vector doubling (measured
+   ≤ 2× quota at 32 KiB and above; quotas below the ~25 KiB runtime baseline refuse at baseline).
+   The bound holds for the production `Lua::execute` path, which steps with a bounded 4096-unit
+   fuel slice; a host driving the public `Executor::step` directly with an unbounded fuel slice
+   must supply its own quota discipline. Deep-recursion worst case is ≈1.4× quota at a 1 MiB
+   ceiling, versus the pre-chokepoint ≈88×.
 2. **Per-allocation pre-checks** for precise early refusal, each _before_ the allocation:
 
    - every Lua table constructor (`{...}`) charges its initial array/map capacity through
@@ -146,8 +152,13 @@ Quota enforcement has two complementary layers:
    - `..` and `table.concat` charge the projected result size before allocating the result buffer;
    - every `Closure` opcode checks the `Gc`-boxed closure and its upvalue vector through
      `Closure::try_from_parts` before the box is allocated, which refuses a retained closure chain;
-   - large standard-library string buffers (for example `string.rep`, `string.format`, and
-     `string.gsub`) are pre-checked before allocation.
+   - every `table.pack` / `table.unpack` sequence batch is capped to the remaining quota before the
+     thread-stack `reserve` (shrunk to fit so execution keeps progressing; refused only when not
+     even one more element fits);
+   - large standard-library buffers — `string.rep`, `string.format`, `string.gsub`, `string.pack`,
+     `string.char`, and `utf8.char` — are pre-checked before allocation (these are native,
+     GC-untracked Rust buffers, so without the charge a hostile call could stage megabytes the
+     GC boundary never observes).
 
 The split around collection is deliberate. `gc-arena` forbids collection while the arena is mutably
 borrowed, so the executor chokepoint can only _refuse_, never reclaim. Collection runs at the host
