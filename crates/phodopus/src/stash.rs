@@ -3,6 +3,8 @@ use std::fmt;
 use gc_arena::{DynamicRoot, DynamicRootSet, Mutation, Rootable};
 
 use crate::{
+    Callback, Closure, Error, Executor, Function, RuntimeError, String, Table, Thread, UserData,
+    Value,
     callback::CallbackInner,
     closure::ClosureInner,
     error::LuaError,
@@ -10,8 +12,6 @@ use crate::{
     table::TableInner,
     thread::{ExecutorInner, ThreadInner},
     userdata::UserDataInner,
-    Callback, Closure, Error, Executor, Function, RuntimeError, String, Table, Thread, UserData,
-    Value,
 };
 
 /// A trait for types that can be stashed into a [`DynamicRootSet`].

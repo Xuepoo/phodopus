@@ -86,8 +86,9 @@
   - `just check` (runs `fmt-check`, `typecheck`, `clippy`, `test`)
   - `just fmt` (formats Rust code with `cargo fmt`)
   - `just actionlint` (validates all `.github/workflows/*.yml` files)
-- Toolchain: pinned to Rust 1.98.1 (`rust-toolchain.toml`), MSRV 1.85
-  (`clippy.toml`).
+- Toolchain: pinned to Rust 1.98.1 (`rust-toolchain.toml`), edition 2024
+  (`Cargo.toml` `[workspace.package]`), MSRV 1.85 (`Cargo.toml` `rust-version`,
+  mirrored in `clippy.toml`).
 - All tests must pass before proposing or merging any changes.
 
 ## Architectural boundaries

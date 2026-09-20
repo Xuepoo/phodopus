@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use phodopus::{error::BacktraceFrame, Closure, Executor, ExternError, Lua};
+use phodopus::{Closure, Executor, ExternError, Lua, error::BacktraceFrame};
 
 #[test]
 fn test_backtrace() {

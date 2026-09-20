@@ -3,11 +3,11 @@ use std::pin::Pin;
 use gc_arena::Collect;
 
 use crate::{
+    BoxSequence, Callback, CallbackReturn, Context, Error, Execution, IntoValue, MetaMethod,
+    Sequence, SequencePoll, Stack, String, Table, TypeError, Value, Variadic,
     error::LuaError,
     meta_ops::{self, MetaResult},
     table::NextValue,
-    BoxSequence, Callback, CallbackReturn, Context, Error, Execution, IntoValue, MetaMethod,
-    Sequence, SequencePoll, Stack, String, Table, TypeError, Value, Variadic,
 };
 
 pub fn load_base<'gc>(ctx: Context<'gc>) {
@@ -40,7 +40,7 @@ pub fn load_base<'gc>(ctx: Context<'gc>) {
                             expected: "string",
                             found: value.type_name(),
                         }
-                        .into())
+                        .into());
                     }
                 };
                 if !(2..=36).contains(&base) {

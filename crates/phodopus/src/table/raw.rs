@@ -1,8 +1,8 @@
 use std::{fmt, hash::Hash, i64, mem};
 
 use allocator_api2::vec;
-use gc_arena::{allocator_api::MetricsAlloc, Collect, Gc, Mutation};
-use hashbrown::{hash_map, HashMap};
+use gc_arena::{Collect, Gc, Mutation, allocator_api::MetricsAlloc};
+use hashbrown::{HashMap, hash_map};
 use thiserror::Error;
 
 use crate::{Callback, Closure, Function, String, Table, Thread, UserData, Value};
@@ -606,11 +606,7 @@ impl<'gc> Key<'gc> {
 // equal value, if such an integer exists.
 fn f64_to_i64(n: f64) -> Option<i64> {
     let i = n as i64;
-    if i as f64 == n {
-        Some(i)
-    } else {
-        None
-    }
+    if i as f64 == n { Some(i) } else { None }
 }
 
 // Parameter must not be NaN, should return a bit-pattern which is always equal when the

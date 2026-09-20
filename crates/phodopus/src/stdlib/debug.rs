@@ -1,9 +1,9 @@
 use anyhow::anyhow;
 
 use crate::{
-    conversion::IntoValue,
-    error::{pretty_print_error_with_backtrace, BacktraceFrame},
     Callback, CallbackReturn, Context, Table, Value,
+    conversion::IntoValue,
+    error::{BacktraceFrame, pretty_print_error_with_backtrace},
 };
 
 pub fn load_debug<'gc>(ctx: Context<'gc>) {

@@ -5,14 +5,14 @@ use anyhow::Context as _;
 use gc_arena::Collect;
 
 use crate::{
-    async_callback::{AsyncSequence, Locals},
-    async_sequence,
-    fuel::count_fuel,
-    meta_ops::{self, concat_separated, ConcatMetaResult, MetaResult},
-    table::RawTable,
     BoxSequence, Callback, CallbackReturn, Closure, Context, Error, Execution, Function, IntoValue,
     MetaMethod, Sequence, SequencePoll, SequenceReturn, Stack, StashedError, StashedFunction,
     StashedTable, StashedValue, Table, Value,
+    async_callback::{AsyncSequence, Locals},
+    async_sequence,
+    fuel::count_fuel,
+    meta_ops::{self, ConcatMetaResult, MetaResult, concat_separated},
+    table::RawTable,
 };
 
 pub fn load_table<'gc>(ctx: Context<'gc>) {

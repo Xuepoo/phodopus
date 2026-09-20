@@ -69,7 +69,7 @@ sidebar_order: 12
 - [x] Clone upstream Piccolo repository, preserving all author history, commits, and tags.
 - [x] Establish remote tracking (`origin` -> `bitty-terminal/phodopus`, `upstream` -> `kyren/piccolo`).
 - [x] Establish workspace identity: `repo.toml`, `workspace.toml`, `AGENTS.md`.
-- [x] Modernize toolchain configuration: `rust-toolchain.toml` (1.98.1), `clippy.toml` (MSRV 1.85).
+- [x] Modernize toolchain configuration: `rust-toolchain.toml` (1.98.1), `Cargo.toml` (edition 2024, MSRV 1.85), `clippy.toml` (MSRV 1.85).
 - [x] Replace single-iteration loops in `meta_ops.rs` with labeled blocks to eliminate Clippy errors.
 - [x] Initialize CarryCtx governance (`.carryctx/`), publish initial snapshot ref `refs/heads/carryctx-snapshots`.
 - [x] Verify green baseline gates: 100% tests pass on `just check`.

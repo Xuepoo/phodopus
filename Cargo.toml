@@ -10,7 +10,8 @@ default-members = [
 
 [workspace.package]
 version = "0.1.0-alpha.1"
-edition = "2021"
+edition = "2024"
+rust-version = "1.85"
 authors = ["kyren <catherine@kyju.org>", "The Bitty Terminal Developers"]
 license = "MIT OR CC0-1.0"
 repository = "https://github.com/bitty-terminal/phodopus"

@@ -1,7 +1,7 @@
 use std::fs::File;
 use std::io::Read;
 
-use phodopus::{io::buffered_read, Closure, Executor, Lua};
+use phodopus::{Closure, Executor, Lua, io::buffered_read};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Load the Lua file

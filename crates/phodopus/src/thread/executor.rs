@@ -1,14 +1,14 @@
 use std::hash::{Hash, Hasher};
 
 use allocator_api2::vec;
-use gc_arena::{allocator_api::MetricsAlloc, lock::RefLock, Collect, Gc, Mutation};
+use gc_arena::{Collect, Gc, Mutation, allocator_api::MetricsAlloc, lock::RefLock};
 use thiserror::Error;
 
 use crate::{
-    compiler::{FunctionRef, LineNumber},
-    thread::BadThreadMode,
     CallbackReturn, Context, Error, FromMultiValue, Fuel, Function, IntoMultiValue, SequencePoll,
     Stack, String, Thread, ThreadMode, Variadic,
+    compiler::{FunctionRef, LineNumber},
+    thread::BadThreadMode,
 };
 
 use super::{
@@ -207,7 +207,7 @@ impl<'gc> Executor<'gc> {
                     return Err(BadThreadMode {
                         found: mode,
                         expected: None,
-                    })
+                    });
                 }
             }
 
