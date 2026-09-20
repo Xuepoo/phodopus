@@ -7,10 +7,8 @@ use crate::{
     Stack, Value,
 };
 
+use super::super::sandbox::FUEL_PER_FORMAT_BYTE;
 use super::{Endianness, FormatCursor, FormatState, calculate_padding, get_align_size_for_option};
-
-/// Fuel charged for advancing over one format-string byte.
-const FUEL_PER_FORMAT_BYTE: i32 = 1;
 
 /// A resumable implementation of `string.unpack`.
 #[derive(Collect)]
@@ -20,8 +18,6 @@ pub(crate) struct UnpackSequence<'gc> {
     state: FormatState,
     #[collect(require_static)]
     bytes: Vec<u8>,
-    #[collect(require_static)]
-    source: Vec<u8>,
     pos: usize,
     values: Vec<Value<'gc>>,
 }
@@ -39,7 +35,6 @@ impl<'gc> UnpackSequence<'gc> {
                 fmt: FormatCursor::create(fmt),
                 state: FormatState::default(),
                 bytes: bytes.to_vec(),
-                source: Vec::new(),
                 pos: start_pos,
                 values: Vec::new(),
             },
@@ -96,9 +91,6 @@ fn process_option<'gc>(
     let pos = &mut seq.pos;
     let values = &mut seq.values;
     let fmt = &mut seq.fmt;
-    // `source` is unused by the current model; keep the field for parity with
-    // the previous in-place implementation.
-    let _ = &seq.source;
 
     match format_char {
         '<' => state.endianness = Endianness::Little,

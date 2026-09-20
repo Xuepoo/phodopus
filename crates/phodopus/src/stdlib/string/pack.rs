@@ -7,13 +7,11 @@ use crate::{
     Stack, Value,
 };
 
+use super::super::sandbox::FUEL_PER_FORMAT_BYTE;
 use super::{
     Endianness, FormatCursor, FormatState, MAX_STRING_PACK_BYTES, calculate_padding,
     get_align_size_for_option,
 };
-
-/// Fuel charged for advancing over one format-string byte.
-const FUEL_PER_FORMAT_BYTE: i32 = 1;
 
 /// A resumable implementation of `string.pack`.
 ///

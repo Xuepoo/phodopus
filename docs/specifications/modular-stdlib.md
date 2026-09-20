@@ -135,7 +135,7 @@ Instead, Phodopus incorporates an authentic Lua pattern engine (`lsonar` 0.2.4) 
 8. **Fuel & Resumption Cost Model**:
    - `string.gsub` is implemented as a resumable `Sequence` (`GsubSequence`). Each `poll` performs as many search/replace iterations as the remaining Fuel allows, then returns `SequencePoll::Pending` with the output buffer, cursor, replacement count, and replacement mode preserved. Output is capped by the checked `MAX_STDLIB_STRING_BYTES` (16 MiB).
    - Each pattern search charges `16` Fuel per candidate start position in the remaining window (`remaining_bytes + 1` attempts), plus `1` Fuel per output byte appended.
-   - `string.find`, `string.match`, and each `string.gmatch` iteration charge the same attempt bound for their single unanchored search. The `lsonar` engine call itself is bounded by `MAX_RECURSION_DEPTH` (500) and the input window and is not preemptible below one call; this residual bound is documented in `sandbox-and-fuel.md` §4.1.3.
+   - `string.find` and `string.match` charge the scanned bytes plus the attempt bound for their single unanchored search. Each `string.gmatch` iteration charges the remaining scan window, its attempt bound, and the bytes it produces as captures. The `lsonar` engine call itself is bounded by `MAX_RECURSION_DEPTH` (500) and the input window and is not preemptible below one call; this residual bound is documented in `sandbox-and-fuel.md` §4.1.3.
 
 ### 4.3 Unicode Support (`utf8` Library)
 

@@ -28,6 +28,10 @@ pub(crate) const FUEL_PER_SCANNED_BYTE: i32 = 1;
 /// Fuel charged for each `string.format` conversion directive expanded.
 pub(crate) const FUEL_PER_FORMAT_DIRECTIVE: i32 = 4;
 
+/// Fuel charged for advancing over one byte of a `string.pack` / `string.unpack`
+/// / `string.packsize` format string.
+pub(crate) const FUEL_PER_FORMAT_BYTE: i32 = 1;
+
 /// Fuel charged per pattern-search attempt (candidate start position) tried by
 /// the pattern engine when no match is found early.
 pub(crate) const FUEL_PER_PATTERN_ATTEMPT: i32 = 16;

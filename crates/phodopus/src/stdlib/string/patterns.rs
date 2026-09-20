@@ -112,6 +112,11 @@ impl GMatchInner {
             .saturating_sub(self.current_pos)
             .saturating_add(1)
     }
+
+    /// Number of bytes remaining in the scan window for the next search.
+    fn scan_window(&self) -> usize {
+        self.bytes.len().saturating_sub(self.current_pos)
+    }
 }
 
 pub fn load_patterns<'gc>(ctx: Context<'gc>, string: &Table<'gc>) {
@@ -250,13 +255,19 @@ pub fn load_patterns<'gc>(ctx: Context<'gc>, string: &Table<'gc>) {
                         err.into_value(ctx)
                     })?;
                     // Each iteration performs one unanchored search. Charge the
-                    // remaining scan window and its attempt bound so repeated
-                    // `gmatch` calls are accounted proportionally.
+                    // remaining scan window, its attempt bound, and the produced
+                    // captures so repeated `gmatch` calls are accounted
+                    // proportionally to the documented model.
+                    let scan_window = inner.scan_window();
                     let attempts = inner.attempt_bound();
-                    exec.fuel()
-                        .consume(sandbox::count_pattern_attempts(attempts));
+                    exec.fuel().consume(
+                        sandbox::scanned_cost(scan_window)
+                            .saturating_add(sandbox::count_pattern_attempts(attempts)),
+                    );
                     match inner.next() {
                         Some(Ok(captures)) => {
+                            let produced: usize = captures.iter().map(|c| c.len()).sum();
+                            exec.fuel().consume(sandbox::output_cost(produced));
                             for capture in captures {
                                 stack.into_back(ctx, capture);
                             }
@@ -389,14 +400,33 @@ impl<'gc> GsubSequence<'gc> {
     }
 }
 
-/// Appends `s` to `result`, enforcing the checked 16 MiB output ceiling.
-fn push_checked<'gc>(result: &mut StdString, s: &str, ctx: Context<'gc>) -> Result<(), Error<'gc>> {
+/// Appends `s` to `result`, enforcing the checked 16 MiB output ceiling and
+/// charging one Fuel per appended output byte.
+fn push_checked<'gc>(
+    result: &mut StdString,
+    s: &str,
+    fuel: &mut crate::Fuel,
+    ctx: Context<'gc>,
+) -> Result<(), Error<'gc>> {
     if sandbox::checked_output_growth(result.len(), s.len()).is_none() {
         return Err(Error::from_value(
             "resulting string too large".into_value(ctx),
         ));
     }
+    fuel.consume(sandbox::output_cost(s.len()));
     result.push_str(s);
+    Ok(())
+}
+
+/// Appends `chunk` to `out`, enforcing the checked 16 MiB ceiling on the
+/// intermediate replacement buffer. This bounds a `%0`-heavy replacement whose
+/// expansion is directives times match length before it is copied into the
+/// result, so it can never grow an unchecked buffer that exceeds the ceiling.
+fn push_replacement(out: &mut Vec<u8>, chunk: &[u8]) -> Result<(), StdString> {
+    if sandbox::checked_output_growth(out.len(), chunk.len()).is_none() {
+        return Err("resulting string too large".to_string());
+    }
+    out.extend_from_slice(chunk);
     Ok(())
 }
 
@@ -424,7 +454,7 @@ impl<'gc> Sequence<'gc> for GsubSequence<'gc> {
         } = &mut *seq;
 
         if *max_replacements == 0 {
-            push_checked(result, text, ctx)?;
+            push_checked(result, text, fuel, ctx)?;
             let interned = ctx.intern(result.as_bytes());
             stack.clear();
             stack.into_back(ctx, interned);
@@ -443,7 +473,7 @@ impl<'gc> Sequence<'gc> for GsubSequence<'gc> {
                 break;
             };
 
-            push_checked(result, &text[*last_pos..match_range.start], ctx)?;
+            push_checked(result, &text[*last_pos..match_range.start], fuel, ctx)?;
 
             let full_match = &text[match_range.start..match_range.end];
             let captures_str: Vec<&str> = captures
@@ -484,7 +514,7 @@ impl<'gc> Sequence<'gc> for GsubSequence<'gc> {
                     }
                 }
             };
-            push_checked(result, &replacement, ctx)?;
+            push_checked(result, &replacement, fuel, ctx)?;
 
             *last_pos = match_range.end;
             *replacements += 1;
@@ -498,7 +528,7 @@ impl<'gc> Sequence<'gc> for GsubSequence<'gc> {
                     .next()
                     .map(|c| c.len_utf8())
                     .unwrap_or(1);
-                push_checked(result, &text[*last_pos..*last_pos + advance_by], ctx)?;
+                push_checked(result, &text[*last_pos..*last_pos + advance_by], fuel, ctx)?;
                 *last_pos += advance_by;
             }
 
@@ -508,7 +538,7 @@ impl<'gc> Sequence<'gc> for GsubSequence<'gc> {
         }
 
         if *last_pos < text_bytes.len() {
-            push_checked(result, &text[*last_pos..], ctx)?;
+            push_checked(result, &text[*last_pos..], fuel, ctx)?;
         }
 
         let interned = ctx.intern(result.as_bytes());
@@ -535,21 +565,21 @@ fn process_replacement_string(
             }
             match bytes[i] {
                 b'%' => {
-                    out_bytes.push(b'%');
+                    push_replacement(&mut out_bytes, b"%")?;
                 }
                 b'0' => {
-                    out_bytes.extend_from_slice(full_match.as_bytes());
+                    push_replacement(&mut out_bytes, full_match.as_bytes())?;
                 }
                 d @ b'1'..=b'9' => {
                     let idx = (d - b'1') as usize;
                     if captures.is_empty() {
                         if d == b'1' {
-                            out_bytes.extend_from_slice(full_match.as_bytes());
+                            push_replacement(&mut out_bytes, full_match.as_bytes())?;
                         } else {
                             return Err(format!("invalid capture index %{}", d as char));
                         }
                     } else if idx < captures.len() {
-                        out_bytes.extend_from_slice(captures[idx].as_bytes());
+                        push_replacement(&mut out_bytes, captures[idx].as_bytes())?;
                     } else {
                         return Err(format!("invalid capture index %{}", d as char));
                     }
@@ -558,7 +588,7 @@ fn process_replacement_string(
             }
             i += 1;
         } else {
-            out_bytes.push(bytes[i]);
+            push_replacement(&mut out_bytes, &bytes[i..i + 1])?;
             i += 1;
         }
     }

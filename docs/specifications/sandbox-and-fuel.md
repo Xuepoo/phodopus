@@ -88,7 +88,7 @@ deterministic model (`crates/phodopus/src/stdlib/sandbox.rs`):
 | Unit               | Fuel cost | Applied to                                                                                                                                                                      |
 | ------------------ | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Output byte        | `1`       | Every byte appended to a growing buffer (`format`, `gsub`, `utf8.char`, `string.sub`/`upper`/`lower`/`reverse`/`char`, `string.rep`, `table.concat`, `load` piecewise assembly) |
-| Scanned input byte | `1`       | Every byte examined by a scan (`utf8.len`/`codepoint`/`offset`/`codes`, `tonumber` with an explicit base)                                                                       |
+| Scanned input byte | `1`       | Every byte examined by a scan (`utf8.len`/`codepoint`/`offset`/`codes`, `tonumber` in both the single-argument and explicit-base forms)                                         |
 | Format directive   | `4`       | Each `string.format` conversion expanded                                                                                                                                        |
 | Pattern attempt    | `16`      | Each candidate start position tried by the pattern engine (`find`, `match`, `gmatch`, `gsub`)                                                                                   |
 | Format-string byte | `1`       | Each byte advanced over by `string.pack`/`unpack`/`packsize`                                                                                                                    |
