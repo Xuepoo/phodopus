@@ -24,6 +24,7 @@ sidebar_order: 22
 - String formatting (`string.format`) specification and supported conversions.
 - Authentic Lua pattern matching (`find`, `match`, `gsub`, `gmatch`) behavior.
 - String metatable and object-oriented method call syntax (`s:sub()`, `s:upper()`, `s:format()`).
+- Safe string repetition (`string.rep`) with memory sandbox ceilings.
 - Standard Lua `utf8` library implementation.
 - Separation of standard UTF-8 code points from terminal typography (monospace column width).
 
@@ -145,6 +146,22 @@ Phodopus implements string metatable and method dispatch via:
 4. **Custom Extensibility**: User scripts or host extensions adding functions to `string` (e.g. `string.custom_fn = ...`) immediately become available via method call syntax (`s:custom_fn(...)`) on all string instances.
 5. **Chaining and Stack Hygiene**: Chained method invocations (`s:sub(...):upper():format(...)`) execute with clean register isolation and zero frame leaks across calls.
 
+### 4.5 Safe String Repetition (`string.rep`)
+
+The `string.rep(s, n [, sep])` function generates a repeated string separated by an optional delimiter:
+
+1. **Parameters**: `s` (string or number), `n` (integer repetition count), and optional `sep` (string or number delimiter).
+2. **Semantics**:
+   - If `n <= 0`: returns the empty string `""`.
+   - If `n == 1`: returns `s` directly without delimiter concatenation or reallocation.
+   - If `n > 1`: concatenates `n` copies of `s` interleaved with `n - 1` copies of `sep` (defaulting to empty string).
+   - Implicit number coercion: numbers passed as `s` or `sep` are coerced to strings.
+   - Method call syntax: supported via string metatable (`("foo"):rep(3, ",") == "foo,foo,foo"`).
+3. **Safe Allocation Ceiling & DoS Protection**:
+   - Buffer allocation size is strictly constrained by `MAX_STRING_REP_BYTES = 16 * 1024 * 1024` (16 MiB).
+   - Total capacity calculation uses checked arithmetic (`checked_mul` and `checked_add`) across both `s` copies and `sep` delimiters.
+   - Any arithmetic overflow or required capacity exceeding 16 MiB raises a standard Lua error (`"resulting string too large"`) rather than panicking or triggering out-of-memory crashes.
+
 ---
 
 ## 5. Security & Verification Plan
@@ -153,3 +170,4 @@ Phodopus implements string metatable and method dispatch via:
 2. **Pattern Conformance**: Run the full PUC-Rio Lua 5.4 string pattern test suite against Phodopus; assert 100% equivalence.
 3. **Malformed UTF-8 Handling**: Assert `utf8.len` returns `nil` and the byte offset of invalid byte sequences without panicking.
 4. **String Method Invocation & Metatable Sandboxing**: Assert that string method calls (`s:len()`, `s:sub()`, `s:upper()`, `s:format()`, `s:find()`) correctly dispatch through the string metatable, custom extension functions on `string` propagate to method calls, direct indexing on strings behaves as expected, and missing methods error gracefully.
+5. **String Repetition Ceiling & DoS Protection**: Assert that `string.rep` with astronomical counts (e.g. `string.rep("a", 1000000000)` or arithmetic overflow with `i64::MAX`) safely fails via `pcall` with `"resulting string too large"`, without memory blowup or panics.

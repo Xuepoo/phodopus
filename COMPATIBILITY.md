@@ -101,7 +101,7 @@ likely not be implemented due to differences between piccolo and PUC-Lua.
 | 🔵   | `match(s, pattern[, init])`       |                                             | Implemented via native Lua pattern engine (`lsonar`) |
 | ⚫️️   | `pack(fmt, values...)`            |             |       |
 | ⚫️️   | `packsize(fmt)`                   |             |       |
-| ⚫️️   | `rep(s, n[, sep])`                |             |       |
+| 🔵   | `rep(s, n[, sep])`                | Safe allocation ceiling (16 MiB)            | Enforces 16 MiB DoS ceiling to prevent OOM attacks   |
 | 🔵   | `reverse(s)`                      |             |       |
 | 🔵   | `sub(s, i[, j])`                  |             |       |
 | ⚫️️   | `unpack(fmt, s[, pos])`           |             |       |
