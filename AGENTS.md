@@ -30,8 +30,10 @@
 - Phase 2 (COMPLETE): Sandboxed module system (`require`) — pluggable searcher
   chain, preloaded core modules, an empty default `package.path`, and
   capability-constrained VFS roots.
-- Phases 3–5 (OPEN): hard memory quotas and Fuel policies, host-agnostic async
-  bridge (`HostOp::Pending`), and Bitty host ABI integration.
+- Phase 3 (IN PROGRESS): hard memory quotas are implemented (see the
+  Sandboxing & Fuel boundary below); the broader Fuel-policy work plus
+  host-agnostic async bridge (`HostOp::Pending`) and Bitty host ABI
+  integration remain open.
   `docs/architecture/roadmap.md` is the single implementation truth for phase
   status.
 - Do not introduce Bitty-specific abstractions or hardcoded async runtime
@@ -112,17 +114,18 @@
   trampoline; this interface is Phase 4 target state and is not yet implemented.
 - **Sandboxing & Fuel**: Execution is deterministic and preemptible by
   instruction Fuel today. A hard heap quota is implemented
-  (`RuntimeBuilder::memory_limit`): it is refused with a typed `OutOfMemory`
-  before a table constructor's initial storage, any later table array/map
+  (`RuntimeBuilder::memory_limit`) with a single executor-loop chokepoint: the
+  tracked allocation is checked after every executor iteration, so any retained
+  growth (including a deep Lua call chain, which has no per-site check) is
+  refused with a typed, `pcall`-catchable `OutOfMemory` and the overshoot is
+  bounded by one executor iteration (`VM_GRANULARITY` = 64 instructions). This
+  is complemented by per-site pre-allocation checks that refuse precisely
+  _before_ a table constructor's initial storage, any later table array/map
   growth, a `..`/`table.concat` result buffer, a `Closure` opcode's `Gc`-boxed
   closure, or a large `string.rep`/`string.format`/`string.gsub` buffer is
-  allocated, and the arena is checked and collected at execution boundaries.
-  Allocation that happens _inside_ an already charged operation (upvalue `Gc`
-  boxes, interned-string nodes, `Gc` box headers) is not each refused
-  individually (a `gc-arena` 0.5.3 limitation); it stays bounded by that charge
-  plus the GC-boundary check rather than forming an unbounded chain. The exact
-  covered paths are the honest scope note in
-  `docs/specifications/sandbox-and-fuel.md` §4.2.
+  allocated. Collection cannot run inside arena mutation, so the executor only
+  refuses; reclamation happens at the GC boundary between steps. The exact
+  bound and scope are in `docs/specifications/sandbox-and-fuel.md` §4.2.
 - **Native Lua Patterns**: String pattern matching implements authentic Lua
   patterns (via PR #129 adaptation) rather than generic Rust regex syntax.
 - **No Hardcoded Values**: Never hardcode host/environment values: absolute

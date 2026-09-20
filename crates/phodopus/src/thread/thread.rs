@@ -482,6 +482,19 @@ impl<'gc> ThreadState<'gc> {
         }
     }
 
+    /// Release the spare capacity of this thread's GC-managed buffers.
+    ///
+    /// A deep call chain grows `frames`, `stack`, and `open_upvalues` with geometric reallocation.
+    /// When the chain unwinds (for example after a quota refusal), the vector *lengths* drop but
+    /// their capacities remain, and those external allocations are unreachable by the collector
+    /// (the thread is still live). Releasing the excess after unwinding is what lets a caught
+    /// `OutOfMemory` actually recover memory so the instance becomes usable again.
+    pub(super) fn shrink_spare_capacity(&mut self) {
+        self.frames.shrink_to_fit();
+        self.stack.shrink_to_fit();
+        self.open_upvalues.shrink_to_fit();
+    }
+
     pub(super) fn close_upvalues(&mut self, mc: &Mutation<'gc>, bottom: usize) {
         let start = match self
             .open_upvalues

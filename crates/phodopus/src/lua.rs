@@ -84,6 +84,16 @@ impl<'gc> Context<'gc> {
             .observe(self.metrics().total_allocation())
     }
 
+    /// Refuse when the arena's tracked allocation is already above the ceiling.
+    ///
+    /// This is the executor chokepoint check: it takes no allocation request and never allocates,
+    /// so it is callable from inside arena mutation where a collection is forbidden. Returns a
+    /// typed [`OutOfMemory`] describing the current excess.
+    pub fn check_current_memory(self) -> Result<(), OutOfMemory> {
+        self.memory_limit()
+            .check_current(self.metrics().total_allocation())
+    }
+
     pub fn globals(self) -> Table<'gc> {
         self.state.globals
     }

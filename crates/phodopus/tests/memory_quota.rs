@@ -5,6 +5,15 @@
 //! clean, typed [`OutOfMemory`] error: no native abort, no panic, and the Lua state remains usable
 //! afterwards. The `pcall` recovery test additionally proves the error is catchable in Lua while
 //! recovery memory remains.
+//!
+//! Two complementary enforcement layers are exercised:
+//!
+//! * per-site pre-allocation checks for the listed operations (table constructor, table growth,
+//!   `..`/`table.concat`, `Closure`, large string buffers), and
+//! * the executor-loop chokepoint, which bounds any *unchecked* retained-growth path (notably deep
+//!   Lua recursion creating thread frames) by one executor iteration rather than by execution
+//!   length. The chokepoint injects a catchable `OutOfMemory` through the Lua error machinery, so
+//!   `pcall` recovers and the instance stays usable.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
@@ -15,6 +24,9 @@ use phodopus::{
 
 /// The quota used by the headline 8 MiB memory-ceiling test.
 const EIGHT_MIB: usize = 8 * 1024 * 1024;
+
+/// The small quota used by the DoS-construct refusal tests.
+const SMALL_QUOTA: usize = 1024 * 1024;
 
 fn start(lua: &mut Lua, source: &str) -> StashedExecutor {
     lua.try_enter(|ctx| {
@@ -642,4 +654,123 @@ fn memory_limit_direct_api() {
     let bounded = MemoryLimit::new(Some(10));
     assert!(bounded.check(4, 6).is_ok());
     assert!(bounded.check(4, 7).is_err());
+}
+
+/// A `MemoryLimit` refuses an already-over-ceiling total through the chokepoint variant, without
+/// taking an allocation request.
+#[test]
+fn memory_limit_check_current_refuses_above_ceiling() {
+    let bounded = MemoryLimit::new(Some(100));
+    assert!(bounded.check_current(100).is_ok());
+    let err = bounded
+        .check_current(101)
+        .expect_err("an over-ceiling total must be refused");
+    assert_eq!(err.limit, 100);
+    assert_eq!(err.current, 101);
+    assert!(bounded.is_exceeded());
+
+    let unbounded = MemoryLimit::new(None);
+    assert!(unbounded.check_current(usize::MAX).is_ok());
+}
+
+/// Deep non-tail Lua recursion — the construct that is *not* covered by any per-site allocation
+/// check, because every level only pushes thread frames and `Gc`-boxed call bookkeeping — must be
+/// refused by the executor-loop chokepoint with a bounded overshoot.
+///
+/// This is the structural regression: before the chokepoint, `f(800000)` at a 1 MiB quota reached
+/// ~92 MiB (≈88×) because the quota was only checked at the host boundary, after the whole step
+/// completed. The executor now checks the arena's tracked allocation after every iteration, so the
+/// peak is bounded by one executor iteration. The asserted bound (2× quota) is the honest,
+/// documented small bound; the observed value is ~1.4× (one geometric vector doubling in the call
+/// frame path).
+#[test]
+fn quota_refuses_deep_recursion_with_bounded_overshoot() -> Result<(), ExternError> {
+    let mut lua = Lua::builder().memory_limit(SMALL_QUOTA).build();
+
+    let executor = start(
+        &mut lua,
+        r#"
+            local function f(n)
+                if n <= 0 then return 0 end
+                return 1 + f(n - 1)
+            end
+            return f(800000)
+        "#,
+    );
+
+    let caught = catch_unwind(AssertUnwindSafe(|| lua.execute::<i64>(&executor)));
+    let result = caught.expect("the chokepoint refusal must not unwind the host thread");
+    let error = result.expect_err("deep recursion over the quota must be refused");
+    let oom = oom_from(&error).expect("failure must be a typed OutOfMemory");
+    assert_eq!(oom.limit, SMALL_QUOTA);
+
+    let observed = lua.total_memory();
+    assert!(
+        observed <= SMALL_QUOTA * 2,
+        "deep recursion peak {observed} exceeded 2x the {SMALL_QUOTA} byte quota \
+         (the structural chokepoint bound is one executor iteration; 88x is the regression)"
+    );
+    Ok(())
+}
+
+/// The deep-recursion refusal must be *catchable* through `pcall`, and the Lua instance must remain
+/// usable afterwards. This is the property the host-boundary refusal cannot provide: the boundary
+/// runs after the executor step has already unwound the Lua stack, so the error is uncatchable.
+/// Injecting the chokepoint error as a normal error frame keeps the call stack intact.
+#[test]
+fn deep_recursion_oom_is_recoverable_through_pcall() -> Result<(), ExternError> {
+    let mut lua = Lua::builder().memory_limit(SMALL_QUOTA).build();
+
+    let executor = start(
+        &mut lua,
+        r#"
+            local function f(n)
+                if n <= 0 then return 0 end
+                return 1 + f(n - 1)
+            end
+            local ok, err = pcall(f, 800000)
+            if ok then return "unexpected-success" end
+            -- The error message is an OOM description; recover and keep allocating.
+            local after = {}
+            after[1] = "still-works"
+            return after[1]
+        "#,
+    );
+
+    let caught = catch_unwind(AssertUnwindSafe(|| lua.execute::<String>(&executor)));
+    let result = caught.expect("a caught recursion OOM must not unwind the host thread");
+    assert_eq!(
+        result?, "still-works",
+        "pcall must catch the recursion OOM and the instance must remain usable"
+    );
+    Ok(())
+}
+
+/// An unbounded loop that retains *new* state each iteration (a fresh table rooted in a growing
+/// table) must be stopped by the quota, not allowed to grow until the process is exhausted.
+#[test]
+fn quota_stops_unbounded_retained_state_loop() -> Result<(), ExternError> {
+    let mut lua = Lua::builder().memory_limit(SMALL_QUOTA).build();
+
+    let executor = start(
+        &mut lua,
+        r#"
+            local root = {}
+            for i = 1, 100000000 do
+                root[i] = { i, i, i, i }
+            end
+            return #root
+        "#,
+    );
+
+    let result = lua.execute::<i64>(&executor);
+    let error = result.expect_err("an unbounded retained-state loop must be stopped");
+    let oom = oom_from(&error).expect("failure must be a typed OutOfMemory");
+    assert_eq!(oom.limit, SMALL_QUOTA);
+    assert!(
+        lua.total_memory() <= SMALL_QUOTA * 2,
+        "tracked total {} exceeded 2x the {SMALL_QUOTA} byte quota",
+        lua.total_memory()
+    );
+    Ok(())
 }
