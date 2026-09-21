@@ -27,12 +27,16 @@ Phodopus solves these challenges at the VM foundation by combining:
 
 - A **stackless bytecode interpreter** running on an explicit frame heap.
 - **Generative lifetime branding** via `gc-arena` for zero-cost, memory-safe garbage collection.
-- Deterministic **Fuel preemption** today; **hard memory limits** are Phase 3
-  target state and are not yet implemented (see [Evolution Roadmap](roadmap.md)).
-- An **external host trampoline**; the typed `HostOp::Pending(handle)`
-  asynchronous suspension descriptor is Phase 4 target state and is not yet
-  implemented. The diagram below shows the target architecture, with planned
-  pieces marked.
+- Deterministic **Fuel preemption** today, plus an enforced **hard memory quota**
+  (`RuntimeBuilder::memory_limit`, Phase 3 runtime half shipped): per-site pre-allocation
+  checks plus an executor-loop chokepoint bound the peak per the [sandbox specification](../specifications/sandbox-and-fuel.md)
+  (measured ≤ 2× quota at 32 KiB and above; quotas below the ~25 KiB runtime baseline
+  refuse at baseline). Broader Fuel-policy work remains open (see [Evolution Roadmap](roadmap.md)).
+- An **external host trampoline**; the typed host-async suspension bridge
+  (`HostOpHandle` via `SequencePoll::Suspend`, Phase 4 runtime half shipped per the
+  [async trampoline specification](../specifications/async-trampoline.md)) is implemented
+  in the core, while the host-side scheduler adapter remains open. The diagram below
+  shows the target architecture, with open pieces marked.
 
 ```text
 +---------------------------------------------------------------+
@@ -51,11 +55,12 @@ Phodopus solves these challenges at the VM foundation by combining:
 |  | - Thread Coroutines   |     | - Sequence State Machines  | |
 |  +-----------------------+     +----------------------------+ |
 +---------------------------------------------------------------+
-                               |
-             HostOp::Pending(handle) Suspension (Phase 4 target)
-                               v
+                                |
+              HostOpHandle via SequencePoll::Suspend
+                   (Phase 4 runtime half shipped)
+                                v
 +---------------------------------------------------------------+
-|                 Host Async Bridge (Phase 4 target)            |
+|            Host Async Adapter (open: host-side driver)        |
 |  (Drives background operations and resumes paused coroutines) |
 +---------------------------------------------------------------+
 ```
@@ -67,10 +72,15 @@ the [Evolution Roadmap](roadmap.md); the following qualification applies to the
 diagram and the sections below:
 
 - **Implemented today**: the stackless executor, `gc-arena` generational
-  branding, `Sequence` state machines, and instruction Fuel preemption.
-- **Target state — not implemented**: hard allocator-enforced memory quotas
-  (Phase 3) and the `HostOp::Pending(handle)` asynchronous bridge with its host
-  trampoline (Phase 4). Where those appear below, they are labeled as target
+  branding, `Sequence` state machines, instruction Fuel preemption, the
+  `RuntimeBuilder::memory_limit` hard heap quota (per-site pre-allocation checks
+  plus the executor-loop chokepoint; peak bounded per the [sandbox
+  specification](../specifications/sandbox-and-fuel.md)), and the typed
+  host-async suspension bridge (`HostOpHandle` via `SequencePoll::Suspend`,
+  `ExecutorMode::HostSuspended`, `resume_host_op` / `cancel_host_op`).
+- **Target state — not implemented**: broader Fuel-policy work, the host-side
+  scheduler adapter driving pending operations (Phase 4 remainder), and the
+  Bitty host ABI (Phase 5). Where those appear below, they are labeled as target
   state.
 
 ---
@@ -142,7 +152,7 @@ Arena::mutate() ---> Executor::step()
 
 ### 3.2 Benefits of the Stackless Model
 
-- **Immunity to Native Overflow**: A recursive Lua script hitting 100,000 stack depth merely grows the heap frame buffer; it cannot cause an unrecoverable native OS stack overflow. Today that growth is bounded only by host memory; the Phase 3 hard memory ceiling is not yet enforced (see Section 1.1).
+- **Immunity to Native Overflow**: A recursive Lua script hitting 100,000 stack depth merely grows the heap frame buffer; it cannot cause an unrecoverable native OS stack overflow. That growth is refused by the enforced hard memory quota: retained growth without a per-site check (for example deep non-tail Lua recursion) is stopped by the executor-loop chokepoint and the peak stays bounded per the [sandbox specification](../specifications/sandbox-and-fuel.md) (measured ≤ 2× quota at 32 KiB and above; quotas below the ~25 KiB runtime baseline refuse at baseline).
 - **Microsecond Cold Starts**: A fresh `Lua` instance initializes in approximately **35 µs** with an initial base heap consumption of only **~11.2 KB**.
 - **Cooperative Multitasking**: Thousands of independent Lua threads can be stepped concurrently within a single OS thread.
 
