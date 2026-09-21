@@ -6,7 +6,7 @@
 
 **Phodopus** is a pure-Rust, stackless Lua runtime designed for uncompromising sandboxing, deterministic execution, and predictable resource bounds.
 
-Originally forked from Catherine West's ([@kyren](https://github.com/kyren)) pioneering work on [Piccolo](https://github.com/kyren/piccolo), Phodopus preserves all original commit history and licensing while advancing the runtime toward a modular embedded engine. Development is pre-adoption: Phases 1, 1.5, and 2 of the roadmap are complete, while the sandbox ceilings, async bridge, and Bitty host ABI remain open (see [Roadmap & Evolution](#roadmap--evolution)). It is not yet a production sandbox and is not yet Bitty's active runtime. Project SemVer begins afresh at `0.1.0-alpha.1` towards `0.1.0`, anchored on the upstream Piccolo `0.3.3` lineage baseline.
+Originally forked from Catherine West's ([@kyren](https://github.com/kyren)) pioneering work on [Piccolo](https://github.com/kyren/piccolo), Phodopus preserves all original commit history and licensing while advancing the runtime toward a modular embedded engine. Development is pre-adoption: Phases 1, 1.5, and 2 of the roadmap are complete; the Phase 3 hard heap quota and the Phase 4 typed host-async suspension bridge are implemented in the runtime core (see [Target Architecture](#target-architecture-status-by-phase)), while the remaining roadmap scope — broader Fuel-policy work, the host-side scheduler adapter, and the Phase 5 Bitty host ABI — remains open (see [Roadmap & Evolution](#roadmap--evolution)). It is not yet a production sandbox and is not yet Bitty's active runtime. Project SemVer begins afresh at `0.1.0-alpha.1` towards `0.1.0`, anchored on the upstream Piccolo `0.3.3` lineage baseline.
 
 ---
 
@@ -26,11 +26,11 @@ _Phodopus_ is the biological genus of small, energetic dwarf hamsters. It harmon
 
 ---
 
-## Target Architecture (Not Yet Implemented)
+## Target Architecture (Status by Phase)
 
-1. **Hard Memory Quotas** (Phase 3): Explicit maximum heap allocation limits enforced directly on the runtime allocator, returning errors or triggering GC before out-of-memory. Heap memory is currently measured via `Lua::total_memory` but is not refused against a quota.
-2. **Host-Agnostic Async Suspension** (Phase 4): Non-blocking host suspension descriptors (`HostOp::Pending`) decoupled from specific async runtimes (Tokio/smol/async-std). The core still carries the Piccolo NOOP waker.
-3. **Bitty Host ABI** (Phase 5): The `bitty-lua` consumer layer mounting terminal, panel, command, and filesystem surfaces on the generic runtime.
+1. **Hard Memory Quotas** (Phase 3, shipped in core): `RuntimeBuilder::memory_limit` installs a hard heap quota, enforced by per-site pre-allocation checks plus a single executor-loop chokepoint, with the peak bounded per the [sandbox specification](docs/specifications/sandbox-and-fuel.md) (measured ≤ 2× quota at 32 KiB and above; quotas below the ~25 KiB runtime baseline refuse at baseline). Broader Fuel-policy work remains open.
+2. **Host-Agnostic Async Suspension** (Phase 4, shipped in core): typed host suspension descriptors (`HostOpHandle`, surfaced through `SequencePoll::Suspend`) decoupled from specific async runtimes (Tokio/smol/async-std); the bridge lives in `crates/phodopus/src/hostop.rs` per the [async trampoline specification](docs/specifications/async-trampoline.md) (status: implemented). The prototype Piccolo no-op waker stub remains only for `AsyncSequence::pending` / in-VM yields; host-driven suspension goes through the typed bridge. The host-side scheduler adapter remains open.
+3. **Bitty Host ABI** (Phase 5, not yet implemented): The `bitty-lua` consumer layer mounting terminal, panel, command, and filesystem surfaces on the generic runtime.
 
 ---
 
