@@ -17,6 +17,7 @@ The Integration topic tree records how external host projects consume Phodopus a
 
 ## Documents
 
-| Document                                     | Type          | Status   | Scope                                                                                                                                                                                               |
-| :------------------------------------------- | :------------ | :------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [Bitty Host ABI Boundary](bitty-host-abi.md) | Specification | Accepted | Bitty's dependency relationship, the `bitty-lua` Host ABI boundary, async trampoline crossing, text-layout separation, integration deferral, and the capability expectations mapped to this corpus. |
+| Document                                        | Type          | Status   | Scope                                                                                                                                                                                                                      |
+| :---------------------------------------------- | :------------ | :------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Bitty Host ABI Boundary](bitty-host-abi.md)    | Specification | Accepted | Bitty's dependency relationship, the `bitty-lua` Host ABI boundary, async trampoline crossing, text-layout separation, integration deferral, and the capability expectations mapped to this corpus.                        |
+| [Bitty Readiness Gate](bitty-readiness-gate.md) | Specification | Draft    | Per-item PASS/BLOCKED verdicts mapping RC-1/RC-2/RC-11, FS-1..FS-9, stdlib allowlists, diagnostics, module isolation, cancellation, and cross-platform evidence to T5-T8 outputs; the `bitty-lua` migration stays BLOCKED. |
