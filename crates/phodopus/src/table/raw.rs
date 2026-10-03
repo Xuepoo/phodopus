@@ -104,7 +104,12 @@ impl<'gc> RawTable<'gc> {
 
         let map = HashMap::with_capacity_and_hasher_in(map_capacity, (), MetricsAlloc::new(mc));
 
-        let hash_builder = ahash::random_state::RandomState::new();
+        let hash_builder = ahash::random_state::RandomState::with_seeds(
+            0x2360_bc05_fba9_b836,
+            0x8054_9fc9_2294_9794,
+            0x9fb2_1c65_1e98_df25,
+            0x7b72_0b9d_f1a6_05e4,
+        );
 
         Self {
             array,
