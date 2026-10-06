@@ -8,6 +8,7 @@ use super::sandbox;
 mod format;
 mod pack;
 mod packsize;
+mod pattern_engine;
 mod patterns;
 mod unpack;
 
