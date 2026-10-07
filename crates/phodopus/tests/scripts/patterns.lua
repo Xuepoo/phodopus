@@ -282,3 +282,28 @@ do
     assert(is_err(function() return string.gsub("abc", "%a", true) end))
     assert(is_err(function() return string.gsub("abc", "%a", { a = true }) end))
 end
+
+-- =========================================================================
+-- 11. Quantified-inner capture backtracking (issue #56)
+-- =========================================================================
+do
+    -- Non-greedy quantified-inner capture with continuation: the trim idiom
+    -- must expand the lazy capture until `%s*$` matches (PUC Lua semantics).
+    local trim = "^%s*(.-)%s*$"
+    assert(string.match("", trim) == "")
+    assert(string.match("   ", trim) == "")
+    assert(string.match("x", trim) == "x")
+    assert(string.match("hello", trim) == "hello")
+    assert(string.match("  hello  ", trim) == "hello")
+    assert(string.match("  a b  ", trim) == "a b")
+
+    -- find returns the same capture plus full-match bounds.
+    local s, e, cap = string.find("  hello  ", trim)
+    assert(s == 1 and e == 9 and cap == "hello")
+
+    -- Greedy sibling keeps longest-match semantics (trailing spaces stay).
+    assert(string.match("  hello  ", "^%s*(.*)%s*$") == "hello  ")
+
+    -- Lazy capture with a literal continuation still backtracks.
+    assert(string.match("aaab", "^(a-)b$") == "aaa")
+end

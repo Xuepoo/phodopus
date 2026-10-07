@@ -11,6 +11,7 @@ use crate::{
 };
 
 use super::super::sandbox;
+use super::pattern_engine;
 
 #[derive(Collect, Clone)]
 #[collect(require_static)]
@@ -70,7 +71,7 @@ impl GMatchInner {
             return result;
         }
 
-        match lsonar::engine::find_first_match(&self.pattern_ast, &self.bytes, self.current_pos) {
+        match pattern_engine::find_first_match(&self.pattern_ast, &self.bytes, self.current_pos) {
             Ok(Some((match_range, captures))) => {
                 if match_range.start == match_range.end {
                     self.current_pos = match_range.end + 1;
@@ -105,7 +106,7 @@ impl GMatchInner {
     }
 
     /// Upper bound on the number of candidate start positions the search loop
-    /// in `lsonar::engine::find_first_match` may try for this call.
+    /// in `pattern_engine::find_first_match` may try for this call.
     fn attempt_bound(&self) -> usize {
         self.bytes
             .len()
@@ -158,7 +159,7 @@ pub fn load_patterns<'gc>(ctx: Context<'gc>, string: &Table<'gc>) {
             );
 
             let Some((start, end, captures)) =
-                lsonar::find(s_str, pattern_str, init.map(|i| i as isize), plain).map_err(
+                pattern_engine::find(s_str, pattern_str, init.map(|i| i as isize), plain).map_err(
                     |err| {
                         let err = err.to_string();
                         err.into_value(ctx)
@@ -212,11 +213,12 @@ pub fn load_patterns<'gc>(ctx: Context<'gc>, string: &Table<'gc>) {
                     .saturating_add(sandbox::count_pattern_attempts(attempts)),
             );
 
-            let Some(captures) = lsonar::r#match(s_str, pattern_str, init.map(|i| i as isize))
-                .map_err(|err| {
-                    let err = err.to_string();
-                    err.into_value(ctx)
-                })?
+            let Some(captures) =
+                pattern_engine::pattern_match(s_str, pattern_str, init.map(|i| i as isize))
+                    .map_err(|err| {
+                        let err = err.to_string();
+                        err.into_value(ctx)
+                    })?
             else {
                 stack.replace(ctx, Value::Nil);
                 return Ok(CallbackReturn::Return);
@@ -317,7 +319,7 @@ enum ReplMode<'gc> {
 /// checked against `MAX_STDLIB_STRING_BYTES` before every append, independent of
 /// any global heap quota.
 ///
-/// Note: a single `lsonar::engine::find_first_match` call is not preemptible
+/// Note: a single `pattern_engine::find_first_match` call is not preemptible
 /// below the engine's `MAX_RECURSION_DEPTH` bound and the pattern length; the
 /// sequence charges an attempt bound of `remaining_window + 1` per call so the
 /// cost is accounted deterministically and the loop yields between matches.
@@ -470,7 +472,7 @@ impl<'gc> Sequence<'gc> for GsubSequence<'gc> {
             let attempts = text_bytes.len().saturating_sub(*last_pos).saturating_add(1);
             fuel.consume(sandbox::count_pattern_attempts(attempts));
 
-            let match_opt = lsonar::engine::find_first_match(pattern_ast, text_bytes, *last_pos)
+            let match_opt = pattern_engine::find_first_match(pattern_ast, text_bytes, *last_pos)
                 .map_err(|err| Error::from_value(err.to_string().into_value(ctx)))?;
 
             let Some((match_range, captures)) = match_opt else {
