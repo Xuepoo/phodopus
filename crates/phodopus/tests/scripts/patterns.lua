@@ -307,3 +307,36 @@ do
     -- Lazy capture with a literal continuation still backtracks.
     assert(string.match("aaab", "^(a-)b$") == "aaa")
 end
+
+-- =========================================================================
+-- 12. Byte-oriented patterns (bitty-terminal/bitty#1826)
+-- =========================================================================
+do
+    -- Lua strings are arbitrary bytes (Lua 5.1 semantics), not necessarily
+    -- UTF-8. A pattern may embed isolated non-UTF8 bytes such as `\128`
+    -- (0x80); the engine must accept it instead of raising an
+    -- "invalid utf-8 sequence" error (bar#6).
+    local byte_pat = "[^\128-\191][\128-\191]*"
+
+    -- gmatch over ASCII text: one segment per byte.
+    local segments = {}
+    for c in string.gmatch("main", byte_pat) do
+        table.insert(segments, c)
+    end
+    assert(#segments == 4)
+    assert(segments[1] == "m" and segments[2] == "a")
+    assert(segments[3] == "i" and segments[4] == "n")
+
+    -- find / match / gsub accept the same byte-pattern.
+    local s, e = string.find("main", byte_pat)
+    assert(s == 1 and e == 1)
+    assert(string.match("main", byte_pat) == "m")
+    local res, n = string.gsub("main", byte_pat, "<%0>")
+    assert(res == "<m><a><i><n>" and n == 4)
+
+    -- Non-UTF8 subject text round-trips through match.
+    local bin = string.char(255) .. "ab"
+    assert(#bin == 3)
+    assert(string.match(bin, ".+") == bin)
+    assert(string.match(string.char(200), "[\0-\255]") == string.char(200))
+end

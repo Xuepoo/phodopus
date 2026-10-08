@@ -6,7 +6,7 @@
 //! fails. The idiomatic trim `^%s*(.-)%s*$` therefore returns `nil` instead
 //! of the trimmed string.
 //!
-//! This module reuses `lsonar`'s parser and AST but matches over a desugared
+//! This module reuses `lsonar`'s AST but matches over a desugared
 //! form where every capture becomes explicit `CaptureStart` / `CaptureEnd`
 //! markers. Quantifiers inside a capture then see the capture-end marker plus
 //! the outer continuation as their `remaining`, so the existing
@@ -14,11 +14,509 @@
 //! outer pattern matches (PUC Lua 5.1 semantics). `Quantified` bodies are
 //! sequences (usually one element) so a quantified capture such as `(a)+`
 //! repeats its full marker span.
+//!
+//! Byte orientation (bitty-terminal/bitty#1826): Lua strings are arbitrary
+//! bytes, not necessarily UTF-8. The upstream `lsonar::Parser::new` takes
+//! `&str`, so a pattern embedding isolated bytes such as `\128` (0x80) cannot
+//! even be represented and `String::to_str` rejects it before matching.
+//! This module therefore parses patterns from `&[u8]` with a byte-faithful
+//! replica of the upstream lexer/parser. The matcher already operates on
+//! bytes; captures are returned as byte vectors so no lossy UTF-8 conversion
+//! can corrupt them.
 
+use std::iter::Peekable;
 use std::ops::Range;
 use std::rc::Rc;
+use std::vec::IntoIter;
 
-use lsonar::{AstNode, LUA_MAXCAPTURES, Quantifier};
+use lsonar::{AstNode, CharSet, LUA_MAXCAPTURES, Quantifier, Token};
+
+/// Byte-faithful replica of the upstream `lsonar` lexer/parser over `&[u8]`.
+///
+/// Upstream `Lexer::new`/`Parser::new` take `&str`, which cannot represent a
+/// pattern containing isolated non-UTF8 bytes (e.g. Lua `'\128'` = 0x80).
+/// The logic below operates directly on bytes and produces the same
+/// `AstNode` stream — including identical error strings — so valid Lua 5.1
+/// byte-patterns parse instead of failing UTF-8 validation.
+fn is_class_byte(c: u8) -> bool {
+    matches!(
+        c,
+        b'a' | b'c'
+            | b'd'
+            | b'g'
+            | b'l'
+            | b'p'
+            | b's'
+            | b'u'
+            | b'w'
+            | b'x'
+            | b'A'
+            | b'C'
+            | b'D'
+            | b'G'
+            | b'L'
+            | b'P'
+            | b'S'
+            | b'U'
+            | b'W'
+            | b'X'
+    )
+}
+
+fn is_escapable_magic_byte(c: u8) -> bool {
+    matches!(
+        c,
+        b'(' | b')' | b'.' | b'%' | b'[' | b']' | b'*' | b'+' | b'-' | b'?' | b'^' | b'$'
+    )
+}
+
+struct ByteLexer<'a> {
+    input: &'a [u8],
+    pos: usize,
+    capture_depth: usize,
+    set_depth: usize,
+}
+
+impl<'a> ByteLexer<'a> {
+    fn new(input: &'a [u8]) -> Self {
+        Self {
+            input,
+            pos: 0,
+            capture_depth: 0,
+            set_depth: 0,
+        }
+    }
+
+    fn peek(&self) -> Option<u8> {
+        self.input.get(self.pos).copied()
+    }
+
+    fn advance(&mut self) -> Option<u8> {
+        let byte = self.peek();
+        if byte.is_some() {
+            self.pos += 1;
+        }
+        byte
+    }
+
+    fn next_token(&mut self) -> Result<Option<Token>, lsonar::Error> {
+        let Some(byte) = self.advance() else {
+            return Ok(None);
+        };
+
+        match byte {
+            b'(' => {
+                self.capture_depth += 1;
+                Ok(Some(Token::LParen))
+            }
+            b')' => {
+                if self.capture_depth > 0 {
+                    self.capture_depth -= 1;
+                    Ok(Some(Token::RParen))
+                } else {
+                    Ok(Some(Token::Literal(b')')))
+                }
+            }
+            b'.' => Ok(Some(Token::Any)),
+            b'[' => {
+                self.set_depth += 1;
+                Ok(Some(Token::LBracket))
+            }
+            b']' => {
+                if self.set_depth > 0 {
+                    self.set_depth -= 1;
+                    Ok(Some(Token::RBracket))
+                } else {
+                    Ok(Some(Token::Literal(byte)))
+                }
+            }
+            b'^' => Ok(Some(Token::Caret)),
+            b'$' => Ok(Some(Token::Dollar)),
+            b'*' => {
+                if self.set_depth > 0 {
+                    Ok(Some(Token::Literal(b'*')))
+                } else {
+                    Ok(Some(Token::Star))
+                }
+            }
+            b'+' => {
+                if self.set_depth > 0 {
+                    Ok(Some(Token::Literal(b'+')))
+                } else {
+                    Ok(Some(Token::Plus))
+                }
+            }
+            b'?' => {
+                if self.set_depth > 0 {
+                    Ok(Some(Token::Literal(b'?')))
+                } else {
+                    Ok(Some(Token::Question))
+                }
+            }
+            b'-' => {
+                if self.set_depth > 0 {
+                    Ok(Some(Token::Literal(b'-')))
+                } else {
+                    Ok(Some(Token::Minus))
+                }
+            }
+            b'%' => {
+                if self.set_depth > 0 {
+                    if let Some(next_byte) = self.peek() {
+                        match next_byte {
+                            byte if is_class_byte(next_byte) => {
+                                self.advance();
+                                Ok(Some(Token::Class(byte)))
+                            }
+                            byte if is_escapable_magic_byte(next_byte) => {
+                                self.advance();
+                                Ok(Some(Token::EscapedLiteral(byte)))
+                            }
+                            b'%' => {
+                                self.advance();
+                                Ok(Some(Token::EscapedLiteral(b'%')))
+                            }
+                            _ => Err(lsonar::Error::Lexer(format!(
+                                "malformed pattern (invalid escape sequence in set: %{})",
+                                next_byte
+                            ))),
+                        }
+                    } else {
+                        Err(lsonar::Error::Lexer(
+                            "malformed pattern (ends with '%' inside set)".to_string(),
+                        ))
+                    }
+                } else {
+                    let Some(next_byte) = self.advance() else {
+                        return Err(lsonar::Error::Lexer(
+                            "malformed pattern (ends with '%')".to_string(),
+                        ));
+                    };
+                    match next_byte {
+                        c if is_escapable_magic_byte(c) => Ok(Some(Token::EscapedLiteral(c))),
+                        c if is_class_byte(c) => Ok(Some(Token::Class(c))),
+                        b'%' => {
+                            self.advance();
+                            Ok(Some(Token::EscapedLiteral(b'%')))
+                        }
+                        b'b' => {
+                            let Some(d1) = self.advance() else {
+                                return Err(lsonar::Error::Lexer(
+                                    "malformed pattern (%b needs two characters)".to_string(),
+                                ));
+                            };
+                            let Some(d2) = self.advance() else {
+                                return Err(lsonar::Error::Lexer(
+                                    "malformed pattern (%b needs two characters)".to_string(),
+                                ));
+                            };
+                            Ok(Some(Token::Balanced(d1, d2)))
+                        }
+                        b'f' => Ok(Some(Token::Frontier)),
+                        d @ b'1'..=b'9' => Ok(Some(Token::CaptureRef(d - b'0'))),
+                        _ => Err(lsonar::Error::Lexer(format!(
+                            "malformed pattern (invalid escape sequence in set: %{})",
+                            next_byte
+                        ))),
+                    }
+                }
+            }
+            _ => Ok(Some(Token::Literal(byte))),
+        }
+    }
+}
+
+const fn token_to_byte(token: &Token) -> u8 {
+    match token {
+        Token::Literal(b) => *b,
+        Token::EscapedLiteral(b) => *b,
+        Token::Any => b'.',
+        Token::LParen => b'(',
+        Token::RParen => b')',
+        Token::LBracket => b'[',
+        Token::RBracket => b']',
+        Token::Caret => b'^',
+        Token::Dollar => b'$',
+        Token::Star => b'*',
+        Token::Plus => b'+',
+        Token::Question => b'?',
+        Token::Minus => b'-',
+        Token::Percent => b'%',
+        Token::Class(c) => *c,
+        Token::Balanced(_, _) => b'b',
+        Token::Frontier => b'f',
+        Token::CaptureRef(d) => b'0' + *d,
+    }
+}
+
+struct ByteParser {
+    tokens: Peekable<IntoIter<Token>>,
+    capture_count: usize,
+}
+
+impl ByteParser {
+    fn new(pattern: &[u8]) -> Result<Self, lsonar::Error> {
+        let mut lexer = ByteLexer::new(pattern);
+        let mut token_vec = Vec::new();
+        loop {
+            match lexer.next_token() {
+                Ok(Some(token)) => token_vec.push(token),
+                Ok(None) => break,
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(Self {
+            tokens: token_vec.into_iter().peekable(),
+            capture_count: 0,
+        })
+    }
+
+    fn parse(&mut self) -> Result<Vec<AstNode>, lsonar::Error> {
+        let ast = self.parse_sequence(None)?;
+
+        if let Some(token) = self.tokens.peek() {
+            return Err(lsonar::Error::Parser(format!(
+                "malformed pattern (unexpected token {token:?} after end of pattern)"
+            )));
+        }
+
+        if self.capture_count > LUA_MAXCAPTURES {
+            return Err(lsonar::Error::Parser(format!(
+                "pattern has too many captures (limit is {LUA_MAXCAPTURES})"
+            )));
+        }
+
+        Ok(ast)
+    }
+
+    fn parse_sequence(&mut self, end_token: Option<&Token>) -> Result<Vec<AstNode>, lsonar::Error> {
+        let mut ast = Vec::new();
+
+        while self.tokens.peek().is_some() && self.tokens.peek() != end_token {
+            ast.push(self.parse_item()?);
+        }
+
+        if end_token.is_some() && self.tokens.peek() != end_token {
+            return Err(lsonar::Error::Parser(format!(
+                "malformed pattern (unexpected end, expected {end_token:?})"
+            )));
+        }
+
+        Ok(ast)
+    }
+
+    fn parse_item(&mut self) -> Result<AstNode, lsonar::Error> {
+        let mut base_item = self.parse_base()?;
+
+        let quantifier = match self.tokens.peek() {
+            Some(Token::Star) => Some(Quantifier::Star),
+            Some(Token::Plus) => Some(Quantifier::Plus),
+            Some(Token::Question) => Some(Quantifier::Question),
+            Some(Token::Minus) => Some(Quantifier::Minus),
+            _ => None,
+        };
+
+        if let Some(q) = quantifier {
+            self.tokens.next();
+
+            match base_item {
+                AstNode::AnchorStart | AstNode::AnchorEnd | AstNode::Frontier(_) => {
+                    return Err(lsonar::Error::Parser(
+                        "pattern item cannot be quantified".to_string(),
+                    ));
+                }
+                _ => {}
+            }
+
+            base_item = AstNode::Quantified {
+                item: Box::new(base_item),
+                quantifier: q,
+            };
+        }
+
+        Ok(base_item)
+    }
+
+    fn parse_base(&mut self) -> Result<AstNode, lsonar::Error> {
+        let Some(token) = self.tokens.next() else {
+            return Err(lsonar::Error::Parser(
+                "unexpected end of pattern".to_string(),
+            ));
+        };
+
+        match token {
+            Token::Literal(b')') => Err(lsonar::Error::Parser(
+                "malformed pattern (unexpected ')')".to_string(),
+            )),
+            Token::Literal(b']') => Err(lsonar::Error::Parser(
+                "malformed pattern (unexpected ']')".to_string(),
+            )),
+            Token::Literal(b) => Ok(AstNode::Literal(b)),
+            Token::EscapedLiteral(b) => Ok(AstNode::Literal(b)),
+            Token::Any => Ok(AstNode::Any),
+            Token::Caret => Ok(AstNode::AnchorStart),
+            Token::Dollar => Ok(AstNode::AnchorEnd),
+
+            Token::Class(c) => {
+                let negated = c.is_ascii_uppercase();
+                let base_byte = if negated { c.to_ascii_lowercase() } else { c };
+                if b"acdglpsuwx".contains(&base_byte) {
+                    Ok(AstNode::Class(base_byte, negated))
+                } else {
+                    Ok(AstNode::Literal(c))
+                }
+            }
+
+            Token::LBracket => self.parse_set(),
+
+            Token::LParen => self.parse_capture(),
+
+            Token::Balanced(d1, d2) => Ok(AstNode::Balanced(d1, d2)),
+            Token::Frontier => {
+                if self.tokens.peek() != Some(&Token::LBracket) {
+                    return Err(lsonar::Error::Parser(
+                        "malformed pattern (missing '[' after %f)".to_string(),
+                    ));
+                }
+                self.tokens.next();
+                let set_node = self.parse_set()?;
+                if let AstNode::Set(charset) = set_node {
+                    Ok(AstNode::Frontier(charset))
+                } else {
+                    unreachable!("parse_set should return AstNode::Set");
+                }
+            }
+
+            Token::RParen => Err(lsonar::Error::Parser(
+                "invalid pattern (unexpected ')')".to_string(),
+            )),
+            Token::RBracket => Err(lsonar::Error::Parser(
+                "invalid pattern (unexpected ']')".to_string(),
+            )),
+            Token::Star | Token::Plus | Token::Question => Err(lsonar::Error::Parser(format!(
+                "invalid pattern (quantifier '{}' must follow an item)",
+                token_to_byte(&token)
+            ))),
+            Token::Minus => Ok(AstNode::Literal(b'-')),
+            Token::Percent => Err(lsonar::Error::Parser(
+                "internal error: Percent token should not reach parser base".to_string(),
+            )),
+            Token::CaptureRef(n) => Ok(AstNode::CaptureRef(n as usize)),
+        }
+    }
+
+    fn parse_set(&mut self) -> Result<AstNode, lsonar::Error> {
+        let mut set = CharSet::new();
+        let mut negated = false;
+
+        if self.tokens.peek() == Some(&Token::Caret) {
+            self.tokens.next();
+            negated = true;
+        }
+
+        if self.tokens.peek() == Some(&Token::RBracket) {
+            self.tokens.next();
+            if negated {
+                set.invert();
+            }
+            return Ok(AstNode::Set(set));
+        }
+
+        if self.tokens.peek() == Some(&Token::RBracket) {
+            self.tokens.next();
+            set.add_byte(b']');
+        }
+
+        while self.tokens.peek().is_some() && self.tokens.peek() != Some(&Token::RBracket) {
+            match self.tokens.peek().cloned() {
+                Some(Token::Class(c)) => {
+                    self.tokens.next();
+                    set.add_class(c)?;
+                }
+                Some(Token::Literal(b)) => {
+                    let current_byte = b;
+                    self.tokens.next();
+
+                    if self.tokens.peek() == Some(&Token::Literal(b'-')) {
+                        let mut iter_clone = self.tokens.clone();
+                        iter_clone.next();
+
+                        if let Some(Token::Literal(next_b)) = iter_clone.peek() {
+                            let next_b_val = *next_b;
+                            self.tokens.next();
+                            self.tokens.next();
+                            set.add_range(current_byte, next_b_val)?;
+                        } else {
+                            set.add_byte(current_byte);
+                        }
+                    } else {
+                        set.add_byte(current_byte);
+                    }
+                }
+                Some(Token::Minus) => {
+                    self.tokens.next();
+                    set.add_byte(b'-');
+                }
+                Some(Token::Percent) => {
+                    self.tokens.next();
+                    set.add_byte(b'%');
+                }
+                Some(_) => {
+                    let token = self.tokens.next().unwrap();
+                    let byte = token_to_byte(&token);
+                    set.add_byte(byte);
+                }
+                None => unreachable!(),
+            }
+        }
+
+        if self.tokens.peek() == Some(&Token::RBracket) {
+            self.tokens.next();
+        } else {
+            return Err(lsonar::Error::Parser(
+                "malformed pattern (unfinished character class)".to_string(),
+            ));
+        }
+
+        if negated {
+            set.invert();
+        }
+
+        Ok(AstNode::Set(set))
+    }
+
+    fn parse_capture(&mut self) -> Result<AstNode, lsonar::Error> {
+        self.capture_count += 1;
+        let index = self.capture_count;
+        if index > LUA_MAXCAPTURES {
+            return Err(lsonar::Error::Parser(format!(
+                "pattern has too many captures (limit is {LUA_MAXCAPTURES})"
+            )));
+        }
+
+        let inner_ast = self.parse_sequence(Some(&Token::RParen))?;
+
+        if self.tokens.next() != Some(Token::RParen) {
+            return Err(lsonar::Error::Parser(
+                "malformed pattern (unclosed capture group)".to_string(),
+            ));
+        }
+
+        Ok(AstNode::Capture {
+            index,
+            inner: inner_ast,
+        })
+    }
+}
+
+/// Parse a Lua pattern from raw bytes (Lua 5.1 semantics).
+///
+/// Unlike `lsonar::Parser::new(&str)`, this accepts patterns containing
+/// isolated non-UTF8 bytes such as `\128` (0x80).
+pub(crate) fn parse_pattern(pattern: &[u8]) -> Result<Vec<AstNode>, lsonar::Error> {
+    let mut parser = ByteParser::new(pattern)?;
+    parser.parse()
+}
 
 /// Flat pattern with explicit capture boundaries.
 #[derive(Clone, Debug)]
@@ -374,14 +872,14 @@ fn calculate_start_index(text_len: usize, init: Option<isize>) -> usize {
     }
 }
 
-/// Fixed `string.find`: same 1-based contract as `lsonar::find`.
+/// Fixed `string.find`: same 1-based contract as `lsonar::find`, byte-oriented.
 pub(crate) fn find(
-    text: &str,
-    pattern: &str,
+    text: &[u8],
+    pattern: &[u8],
     init: Option<isize>,
     plain: bool,
-) -> Result<Option<(usize, usize, Vec<String>)>, lsonar::Error> {
-    let text_bytes = text.as_bytes();
+) -> Result<Option<(usize, usize, Vec<Vec<u8>>)>, lsonar::Error> {
+    let text_bytes = text;
     let byte_len = text_bytes.len();
     let start_byte_index = calculate_start_index(byte_len, init);
 
@@ -398,7 +896,7 @@ pub(crate) fn find(
         }
         if let Some(relative) = text_bytes[start_byte_index..]
             .windows(pattern.len())
-            .position(|window| window == pattern.as_bytes())
+            .position(|window| window == pattern)
         {
             let zero_start = start_byte_index + relative;
             let zero_end = zero_start + pattern.len();
@@ -407,19 +905,15 @@ pub(crate) fn find(
         return Ok(None);
     }
 
-    let mut parser = lsonar::Parser::new(pattern)?;
-    let ast = parser.parse()?;
+    let ast = parse_pattern(pattern)?;
 
     match find_first_match(&ast, text_bytes, start_byte_index)? {
         Some((match_range, capture_ranges)) => {
             let start = match_range.start.saturating_add(1);
             let end = match_range.end;
-            let captures: Vec<String> = capture_ranges
+            let captures: Vec<Vec<u8>> = capture_ranges
                 .into_iter()
-                .filter_map(|maybe_range| {
-                    maybe_range
-                        .map(|range| String::from_utf8_lossy(&text_bytes[range]).into_owned())
-                })
+                .filter_map(|maybe_range| maybe_range.map(|range| text_bytes[range].to_vec()))
                 .collect();
             Ok(Some((start, end, captures)))
         }
@@ -427,31 +921,26 @@ pub(crate) fn find(
     }
 }
 
-/// Fixed `string.match`: same contract as `lsonar::match`.
+/// Fixed `string.match`: same contract as `lsonar::match`, byte-oriented.
 pub(crate) fn pattern_match(
-    text: &str,
-    pattern: &str,
+    text: &[u8],
+    pattern: &[u8],
     init: Option<isize>,
-) -> Result<Option<Vec<String>>, lsonar::Error> {
-    let text_bytes = text.as_bytes();
+) -> Result<Option<Vec<Vec<u8>>>, lsonar::Error> {
+    let text_bytes = text;
     let byte_len = text_bytes.len();
     let start_byte_index = calculate_start_index(byte_len, init);
 
-    let mut parser = lsonar::Parser::new(pattern)?;
-    let ast = parser.parse()?;
+    let ast = parse_pattern(pattern)?;
 
     match find_first_match(&ast, text_bytes, start_byte_index)? {
         Some((match_range, capture_ranges)) => {
-            let captures: Vec<String> = capture_ranges
+            let captures: Vec<Vec<u8>> = capture_ranges
                 .into_iter()
-                .filter_map(|maybe_range| {
-                    maybe_range
-                        .map(|range| String::from_utf8_lossy(&text_bytes[range]).into_owned())
-                })
+                .filter_map(|maybe_range| maybe_range.map(|range| text_bytes[range].to_vec()))
                 .collect();
             if captures.is_empty() {
-                let full = String::from_utf8_lossy(&text_bytes[match_range.start..match_range.end])
-                    .into_owned();
+                let full = text_bytes[match_range.start..match_range.end].to_vec();
                 Ok(Some(vec![full]))
             } else {
                 Ok(Some(captures))
