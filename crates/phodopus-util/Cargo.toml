@@ -8,9 +8,9 @@ rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-# Source-only distribution: gc-arena is pinned to a revision that is not on
-# crates.io, so the crate is intentionally non-publishable. See release.toml.
-publish = false
+# Phase A (bitty#1512): publish-ready flag for crates.io. Blocker remains:
+# gc-arena is pinned to a git revision not on crates.io (see release.toml).
+publish = true
 
 [dependencies]
 serde = { workspace = true, optional = true }
