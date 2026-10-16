@@ -47,7 +47,7 @@ impl<T: ?Sized> Write<T> {
     #[inline(always)]
     pub unsafe fn assume(v: &T) -> &Self {
         // SAFETY: `Self` is `repr(transparent)`.
-        mem::transmute(v)
+        unsafe { mem::transmute(v) }
     }
 
     /// Gets a writable reference to non-GC'd data.
@@ -75,8 +75,10 @@ impl<T: ?Sized> Write<T> {
     #[inline(always)]
     #[doc(hidden)]
     pub unsafe fn __from_ref_and_ptr(v: &T, _: *const T) -> &Self {
-        // SAFETY: `Self` is `repr(transparent)`.
-        mem::transmute(v)
+        unsafe {
+            // SAFETY: `Self` is `repr(transparent)`.
+            mem::transmute(v)
+        }
     }
 
     /// Unlocks the referenced value, providing full interior mutability.
@@ -165,10 +167,12 @@ macro_rules! __field {
         // access nested `Gc` pointers, which would violate the write barrier invariant. This is
         // guaranteed as follows:
         // - the destructuring pattern, unlike a simple field access, cannot call `Deref`;
+        // - the `ref` binding mode also forbids (under edition 2024) going through simple
+        //   references (i.e. it will reject `&Write<&Type>`s);
         // - similarly, the `__from_ref_and_ptr` method takes both a reference (for the lifetime)
         //   and a pointer, causing a compilation failure if the first argument was coerced.
         match $value {
-            $crate::barrier::Write {
+            &$crate::barrier::Write {
                 __inner: $type { ref $field, .. },
                 ..
             } => unsafe { $crate::barrier::Write::__from_ref_and_ptr($field, $field as *const _) },

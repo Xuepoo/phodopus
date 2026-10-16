@@ -7,10 +7,10 @@ use core::{
 };
 
 use crate::{
+    Gc,
     collect::Collect,
     metrics::Metrics,
     types::{GcBox, GcBoxHeader, GcBoxInner, GcColor, Invariant},
-    Gc,
 };
 
 /// Handle value given by arena callbacks during construction and mutation. Allows allocating new
@@ -217,7 +217,7 @@ impl Context {
 
     #[inline]
     pub(crate) unsafe fn mutation_context<'gc>(&self) -> &Mutation<'gc> {
-        mem::transmute::<&Self, &Mutation>(&self)
+        unsafe { mem::transmute::<&Self, &Mutation>(&self) }
     }
 
     #[inline]
@@ -228,7 +228,7 @@ impl Context {
 
     #[inline]
     pub(crate) unsafe fn finalization_context<'gc>(&self) -> &Finalization<'gc> {
-        mem::transmute::<&Self, &Finalization>(&self)
+        unsafe { mem::transmute::<&Self, &Finalization>(&self) }
     }
 
     #[inline]
@@ -595,9 +595,9 @@ impl Context {
 unsafe fn free_gc_box<'gc>(mut gc_box: GcBox) {
     if gc_box.header().is_live() {
         // If the alive flag is set, that means we haven't dropped the inner value of this object,
-        gc_box.drop_in_place();
+        unsafe { gc_box.drop_in_place() };
     }
-    gc_box.dealloc();
+    unsafe { gc_box.dealloc() };
 }
 
 /// Helper type for managing phase transitions.

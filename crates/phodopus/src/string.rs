@@ -72,7 +72,17 @@ impl<'gc> String<'gc> {
             },
             metrics,
         };
-        // SAFETY: We know we can cast to `StringInner` because `Owned` is `#[repr(C)]`
+        // Alignment guard for the `Gc::cast` below: both types always have alignment 8
+        // (`StringInner` is a u64 plus a fat-pointer-wide `Buffer`; `Metrics` is a
+        // pointer-wide `Rc`). Fails loudly in debug builds if that ever stops holding.
+        debug_assert_eq!(
+            core::mem::align_of::<Owned>(),
+            core::mem::align_of::<StringInner>(),
+            "Gc::cast requires identical source/target alignment",
+        );
+        // SAFETY: `Owned` is `#[repr(C)]` with `StringInner` as its first field (offset 0),
+        // and the alignment guard above upholds `Gc::cast`'s identical-alignment requirement
+        // (phodopus-gc-arena backport of upstream gc-arena v0.6.1 docs).
         String(unsafe { Gc::cast::<StringInner>(Gc::new(mc, owned)) })
     }
 
@@ -102,8 +112,18 @@ impl<'gc> String<'gc> {
             string.array[0..s.len()].copy_from_slice(s);
 
             let string = Gc::new(mc, string);
-            // SAFETY: We know we can cast to `StringInner` because `InlineString` is `#[repr(C)]`
-            // and `header` is the first field.
+            // Alignment guard for the `Gc::cast` below: both types always have alignment 8 (the
+            // trailing `[u8; N]` payload has alignment 1 regardless of `N`). Fails loudly in
+            // debug builds if that ever stops holding.
+            debug_assert_eq!(
+                core::mem::align_of::<InlineString<N>>(),
+                core::mem::align_of::<StringInner>(),
+                "Gc::cast requires identical source/target alignment",
+            );
+            // SAFETY: `InlineString<N>` is `#[repr(C)]` with `StringInner` as its first field
+            // (offset 0), and the alignment guard above upholds `Gc::cast`'s
+            // identical-alignment requirement (phodopus-gc-arena backport of upstream gc-arena
+            // v0.6.1 docs).
             unsafe { String(Gc::cast::<StringInner>(string)) }
         }
 

@@ -70,7 +70,7 @@ unsafe impl<'gc, A: Allocator> Allocator for MetricsAlloc<'gc, A> {
     #[inline]
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
         self.metrics.mark_external_deallocation(layout.size());
-        self.allocator.deallocate(ptr, layout);
+        unsafe { self.allocator.deallocate(ptr, layout) };
     }
 
     #[inline]
@@ -87,7 +87,7 @@ unsafe impl<'gc, A: Allocator> Allocator for MetricsAlloc<'gc, A> {
         old_layout: Layout,
         new_layout: Layout,
     ) -> Result<NonNull<[u8]>, AllocError> {
-        let ptr = self.allocator.grow(ptr, old_layout, new_layout)?;
+        let ptr = unsafe { self.allocator.grow(ptr, old_layout, new_layout) }?;
         self.metrics
             .mark_external_allocation(new_layout.size() - old_layout.size());
         Ok(ptr)
@@ -100,7 +100,7 @@ unsafe impl<'gc, A: Allocator> Allocator for MetricsAlloc<'gc, A> {
         old_layout: Layout,
         new_layout: Layout,
     ) -> Result<NonNull<[u8]>, AllocError> {
-        let ptr = self.allocator.grow_zeroed(ptr, old_layout, new_layout)?;
+        let ptr = unsafe { self.allocator.grow_zeroed(ptr, old_layout, new_layout) }?;
         self.metrics
             .mark_external_allocation(new_layout.size() - old_layout.size());
         Ok(ptr)
@@ -113,7 +113,7 @@ unsafe impl<'gc, A: Allocator> Allocator for MetricsAlloc<'gc, A> {
         old_layout: Layout,
         new_layout: Layout,
     ) -> Result<NonNull<[u8]>, AllocError> {
-        let ptr = self.allocator.shrink(ptr, old_layout, new_layout)?;
+        let ptr = unsafe { self.allocator.shrink(ptr, old_layout, new_layout) }?;
         self.metrics
             .mark_external_deallocation(old_layout.size() - new_layout.size());
         Ok(ptr)
