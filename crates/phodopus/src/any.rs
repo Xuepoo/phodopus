@@ -128,8 +128,19 @@ impl<'gc, M> Any<'gc, M> {
             },
         );
 
-        // SAFETY: We know we can cast to a `Header<M>` because `Value<M, Root<'gc, R>>` is
-        // `#[repr(C)]` and `Header<M>` is the first field
+        // Alignment guard for the `Gc::cast` below: `Gc::cast` requires source and target
+        // alignment to be identical (phodopus-gc-arena backport of upstream gc-arena v0.6.1
+        // docs). All current payloads have alignment 8 or less; this fails loudly in debug
+        // builds if a higher-alignment payload is ever introduced. (Full structural fix is
+        // upstream PR #149, a 0.7.0-line upgrade, not a fork patch.)
+        debug_assert_eq!(
+            core::mem::align_of::<Value<M, Root<'gc, R>>>(),
+            core::mem::align_of::<AnyInner<M>>(),
+            "Gc::cast requires identical source/target alignment",
+        );
+        // SAFETY: `Value<M, Root<'gc, R>>` is `#[repr(C)]` with `AnyInner<M>` as its first field
+        // (offset 0), so the header cast itself is valid; the alignment guard above upholds
+        // `Gc::cast`'s identical-alignment requirement.
         Self(unsafe { Gc::cast::<AnyInner<M>>(val) })
     }
 
@@ -166,11 +177,21 @@ impl<'gc, M> Any<'gc, M> {
         Root<'gc, R>: Sized,
     {
         if TypeId::of::<R>() == self.0.type_id {
+            // Alignment guard for the reverse-direction `Gc::cast` below, mirroring the one in
+            // `with_metadata`: fails loudly in debug builds if a higher-alignment payload is
+            // ever introduced.
+            debug_assert_eq!(
+                core::mem::align_of::<Value<M, Root<'gc, R>>>(),
+                core::mem::align_of::<AnyInner<M>>(),
+                "Gc::cast requires identical source/target alignment",
+            );
             // SAFETY: The runtime `type_id` check guarantees the stored value is exactly
             // `Value<M, Root<'gc, R>>`. `Value<M, V>` is `#[repr(C)]` with `AnyInner<M>` as its
             // first field, matching the `AnyInner<M>` pointer we start from. `Gc` is invariant in
             // `'gc`, so the projected `'gc` is the same lifetime the value was stored with, and the
             // module-level safety argument above rules out cross-`Rootable` projection confusion.
+            // The alignment guard above upholds `Gc::cast`'s identical-alignment requirement
+            // (phodopus-gc-arena backport of upstream gc-arena v0.6.1 docs).
             let ptr = unsafe { Gc::cast::<Value<M, Root<'gc, R>>>(self.0) };
             Some(&ptr.as_ref().value)
         } else {

@@ -31,8 +31,11 @@ expressed in safe Rust. Every site is:
    `crates/phodopus/src/stdlib/` and is already inside that forbidden tree
    (`scripts/check-unsafe-ledger.sh:107-120`).
 
-In scope: every `unsafe` token in a Rust source file under `crates/`. Out of scope: safe API
-surface, dependency internals (`gc-arena`, `hashbrown`), and build tooling.
+In scope: every `unsafe` token in first-party Rust source under `crates/`,
+excluding the vendored `crates/phodopus-gc-arena` and
+`crates/phodopus-gc-arena-derive` fork crates (CTX-0031). Out of scope: safe
+API surface, dependency internals (`gc-arena` fork source, `hashbrown`), and
+build tooling.
 
 ---
 

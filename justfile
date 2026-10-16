@@ -114,9 +114,11 @@ test:
 msrv:
     cargo +1.85 check --workspace --all-targets
 
-# Release version consistency: every workspace member must declare the same
+# Release version consistency: phodopus and phodopus-util must share the workspace
 # version, and a tagged HEAD must match it. Tag/version identity repair is
-# CTX-0016; this gate only asserts internal consistency.
+# CTX-0016; this gate only asserts internal consistency. The phodopus-gc-arena
+# fork crates intentionally track the upstream gc-arena version (0.5.3) under
+# new names, so they are checked as a separate consistent group (CTX-0031).
 version-check:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -124,11 +126,24 @@ version-check:
         | jq -r '.workspace_members as $m
             | .packages[]
             | select(.id as $i | $m | index($i))
+            | select(.name == "phodopus" or .name == "phodopus-util")
             | .version')"
     unique="$(printf '%s\n' "${versions}" | sort -u)"
     if [[ "$(printf '%s\n' "${unique}" | wc -l)" -ne 1 ]]; then
-        echo "FAIL: workspace members declare divergent versions:" >&2
+        echo "FAIL: phodopus members declare divergent versions:" >&2
         printf '  %s\n' ${unique} >&2
+        exit 1
+    fi
+    fork_versions="$(cargo metadata --no-deps --format-version 1 \
+        | jq -r '.workspace_members as $m
+            | .packages[]
+            | select(.id as $i | $m | index($i))
+            | select(.name == "phodopus-gc-arena" or .name == "phodopus-gc-arena-derive")
+            | .version')"
+    fork_unique="$(printf '%s\n' "${fork_versions}" | sort -u)"
+    if [[ "$(printf '%s\n' "${fork_unique}" | wc -l)" -ne 1 ]]; then
+        echo "FAIL: fork members declare divergent versions:" >&2
+        printf '  %s\n' ${fork_unique} >&2
         exit 1
     fi
     version="${unique}"
@@ -137,13 +152,12 @@ version-check:
         echo "FAIL: HEAD tag ${tag} does not match workspace version ${version}" >&2
         exit 1
     fi
-    echo "version-check: OK (${version}${tag:+; tag ${tag}})"
+    echo "version-check: OK (${version}${tag:+; tag ${tag}}; fork ${fork_unique})"
 
-# Cargo package file-set check for every workspace member. Under the source-only
-# distribution model adopted by CTX-0016 (`publish = false`, gc-arena pinned to a
-# git revision with no API-compatible registry version), `cargo package` manifest
-# verification cannot succeed; `--list` is the supported package check and
-# matches CTX-0016's release workflow.
+# Cargo package file-set check for every workspace member. The renamed
+# `phodopus-gc-arena` fork (CTX-0031) carries the pinned gc-arena source under
+# new registry names, so `--list` enumerates the publishable file set for all
+# members; full manifest verification runs via `cargo publish --dry-run`.
 package-check:
     cargo package --list --workspace --allow-dirty
 

@@ -139,9 +139,19 @@ impl<'gc> Callback<'gc> {
             },
         );
 
-        // SAFETY: `HeaderCallback<C>` is `#[repr(C)]` with `CallbackInner` (which contains only the
-        // function pointer, no data) as its first field, so casting the `Gc` pointer to
-        // `CallbackInner` is a valid header cast and loses no data.
+        // Alignment guard for the `Gc::cast` below: `Gc::cast` requires source and target
+        // alignment to be identical (phodopus-gc-arena backport of upstream gc-arena v0.6.1
+        // docs). All current `CallbackFn` payloads have alignment 8 or less; this fails loudly
+        // in debug builds if a higher-alignment payload is ever introduced. (Full structural
+        // fix is upstream PR #149, a 0.7.0-line upgrade, not a fork patch.)
+        debug_assert_eq!(
+            core::mem::align_of::<HeaderCallback<C>>(),
+            core::mem::align_of::<CallbackInner>(),
+            "Gc::cast requires identical source/target alignment",
+        );
+        // SAFETY: `HeaderCallback<C>` is `#[repr(C)]` with `CallbackInner` (which contains only
+        // the function pointer, no data) as its first field, so the header lives at offset 0;
+        // the alignment guard above upholds `Gc::cast`'s identical-alignment requirement.
         Self(unsafe { Gc::cast::<CallbackInner>(hc) })
     }
 

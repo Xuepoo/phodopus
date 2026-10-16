@@ -25,5 +25,7 @@
     "util",
     "COMPATIBILITY.md",
     "CHANGELOG.md",
+    "crates/phodopus-gc-arena/README-UPSTREAM.md",
+    "crates/phodopus-gc-arena/CHANGELOG-UPSTREAM.md",
   ],
 }
