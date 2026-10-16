@@ -1,0 +1,56 @@
+[package]
+name = "phodopus-gc-arena"
+version = "0.5.3"
+edition = "2021"
+rust-version = "1.85"
+authors = ["kyren <catherine@kyju.org>", "moulins", "Aaron Hill <aa1ronham@gmail.com>"]
+license = "MIT"
+description = "Safe incrementally garbage collected arenas (phodopus registry fork of gc-arena 0.5.3 pin)"
+readme = "README.md"
+repository = "https://github.com/bitty-terminal/phodopus"
+documentation = "https://docs.rs/phodopus-gc-arena"
+homepage = "https://github.com/bitty-terminal/phodopus"
+keywords = ["gc", "arena", "garbage-collection", "no-std"]
+categories = ["memory-management", "no-std"]
+
+[lib]
+name = "gc_arena"
+
+[features]
+default = ["std"]
+std = []
+tracing = ["dep:tracing"]
+allocator-api2 = ["dep:allocator-api2", "hashbrown?/allocator-api2"]
+
+[dependencies]
+allocator-api2 = { version = "0.2", optional = true, default-features = false, features = ["alloc"] }
+gc-arena-derive = { package = "phodopus-gc-arena-derive", path = "../phodopus-gc-arena-derive", version = "0.5.3" }
+hashbrown = { version = "0.14", optional = true, default-features = false }
+sptr = "0.3.2"
+tracing = { version = "0.1.37", optional = true, default-features = false }
+
+[dev-dependencies]
+rand = "0.8"
+# MSRV 1.85 ceiling: trybuild 1.0.120+ requires rustc 1.88, so pin to the
+# newest 1.85-compatible release for `cargo +1.85 check --workspace --all-targets`.
+trybuild = "=1.0.119"
+
+[lints.rust]
+# Fork baseline: vendored upstream pin triggers rustc warnings on the current
+# toolchain that are not present in phodopus first-party code. Scoped here so
+# the workspace-wide `-D warnings` gate stays strict for phodopus crates.
+dead_code = "allow"
+unused_imports = "allow"
+
+[lints.clippy]
+# Fork baseline: upstream pin predates the current clippy; allows are scoped
+# to this crate so the workspace baseline stays shrink-only for first-party code.
+missing_safety_doc = "allow"
+needless_borrow = "allow"
+neg_cmp_op_on_partial_ord = "allow"
+manual_map = "allow"
+extra_unused_lifetimes = "allow"
+should_implement_trait = "allow"
+partialeq_ne_impl = "allow"
+unnecessary_lazy_evaluations = "allow"
+bool_assert_comparison = "allow"

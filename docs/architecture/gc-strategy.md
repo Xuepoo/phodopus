@@ -27,17 +27,27 @@ Because garbage collection is deeply woven into value representations (`Value<'g
 
 ---
 
-## 2. Current Baseline Pinning (gc-arena 0.5.3)
+## 2. Current Baseline Pinning (gc-arena 0.5.3 via renamed fork)
 
-Phodopus currently pins `gc-arena` to commit `5a7534b883b703f23cfb8c3cfdf033460aa77ea9`:
+Phodopus carries the `gc-arena` pin as the renamed registry fork
+`phodopus-gc-arena` at version `0.5.3` (upstream commit
+`5a7534b883b703f23cfb8c3cfdf033460aa77ea9`, library name `gc_arena`
+preserved). The workspace dependency is a versioned path dep that resolves
+to the registry once the owner publishes the fork:
 
 ```toml
 gc-arena = {
-    git = "https://github.com/kyren/gc-arena",
-    rev = "5a7534b883b703f23cfb8c3cfdf033460aa77ea9",
+    package = "phodopus-gc-arena",
+    path = "crates/phodopus-gc-arena",
+    version = "0.5.3",
     features = ["allocator-api2", "hashbrown"]
 }
 ```
+
+The fork source is the pinned upstream revision verbatim except for the
+package rename and publish metadata; the registry `0.5.3` release predates
+the pin and is API-incompatible, so a plain version requirement cannot
+describe a buildable package.
 
 This revision corresponds to upstream release **0.5.3**. The critical capabilities of this generation are:
 
@@ -175,10 +185,11 @@ itself remains part of the Stage 4 compatibility-fork or upstream-PR work.
 
 ### Stage 3 & 4: Upstream Tracking or Compatibility Fork
 
-If upstream `gc-arena` 0.7+ permanently rejects external allocation tracking hooks:
-
-1. Phodopus will publish and maintain an organization-scoped fork (`bitty-terminal/gc-arena` or `phodopus-gc-arena`).
-2. The fork will preserve zero-cost `Gc` pointers while adding explicit allocator budget callbacks necessary for deterministic sandbox execution.
+Upstream `gc-arena` 0.7+ removed the external allocation tracking hooks, so
+Phodopus maintains the organization-scoped renamed fork `phodopus-gc-arena`
+(CTX-0031, for bitty CTX-1262). The fork preserves zero-cost `Gc` pointers
+and the pinned 0.5.3 quota accounting (`MetricsAlloc`, `DynamicRootSet`,
+`Collect`, pacing) with only manifest changes.
 
 ---
 
@@ -186,11 +197,23 @@ If upstream `gc-arena` 0.7+ permanently rejects external allocation tracking hoo
 
 When publishing `phodopus` to `crates.io`:
 
-- Cargo rejects crates whose dependencies rely exclusively on `git = "..."` without a crates.io-compatible source.
-- Once ready for publishing, the dependency will specify both `version = "0.5.3"` and `git`:
+- Cargo rejects any `git = "..."` dependency, even with a `version` key, so
+  the pin cannot ship as a git requirement.
+- The workspace depends on the renamed fork through a versioned path dep
+  (`package = "phodopus-gc-arena"`, `version = "0.5.3"`), which builds from
+  the local path and resolves to the registry once the owner publishes in
+  order: `phodopus-gc-arena-derive`, then `phodopus-gc-arena`, then
+  `phodopus` and `phodopus-util`:
 
 ```toml
-gc-arena = { version = "0.5.3", git = "https://github.com/kyren/gc-arena", rev = "5a7534b883b703f23cfb8c3cfdf033460aa77ea9", features = ["allocator-api2", "hashbrown"] }
+gc-arena = {
+    package = "phodopus-gc-arena",
+    path = "crates/phodopus-gc-arena",
+    version = "0.5.3",
+    features = ["allocator-api2", "hashbrown"]
+}
 ```
 
-This guarantees local build reproducibility while satisfying crates.io package verification rules.
+This guarantees local build reproducibility while satisfying crates.io
+package verification rules. Actual `cargo publish` runs remain owner-only;
+this branch performs publish-PREP only (`--dry-run`).

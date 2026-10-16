@@ -2,12 +2,17 @@
 # check-unsafe-ledger.sh — enforce the Phodopus unsafe ledger.
 #
 # Verifies three invariants against docs/security/unsafe-ledger.md:
-#   1. Every Rust source file under crates/ has exactly the number of code `unsafe`
+#   1. Every Rust source file under crates/ (excluding the vendored
+#      phodopus-gc-arena fork, CTX-0031) has exactly the number of code `unsafe`
 #      occurrences recorded in the ledger's machine manifest (no unreviewed
 #      additions, no silently dropped sites).
 #   2. Every `unsafe` occurrence is immediately preceded by a `SAFETY:` comment
 #      justifying its invariants.
 #   3. The stdlib and compiler trees contain zero `unsafe`.
+#
+# The phodopus-gc-arena fork crates are vendored upstream (gc-arena pin
+# 5a7534b) with their own safety reasoning; they are excluded from this
+# ledger and covered by upstream review plus the fork's test suite.
 #
 # Full-line comments (`//`, `///`, `//!`) are ignored when counting, so prose may
 # discuss unsafety without affecting the manifest.
@@ -67,7 +72,7 @@ while IFS= read -r file; do
 	if [[ "${n}" -gt 0 ]]; then
 		found["${rel}"]="${n}"
 	fi
-done < <(find "${REPO_ROOT}/crates" -name '*.rs' -type f | sort)
+done < <(find "${REPO_ROOT}/crates" -name '*.rs' -type f -not -path "*/phodopus-gc-arena*" -not -path "*/phodopus-gc-arena-derive*" | sort)
 
 for path in "${!expected[@]}"; do
 	if [[ ! -f "${REPO_ROOT}/${path}" ]]; then
@@ -90,6 +95,7 @@ for path in "${!found[@]}"; do
 done
 
 # --- 2. SAFETY comment coverage --------------------------------------------
+# Fork crates excluded: vendored upstream, see header.
 while IFS= read -r file; do
 	rel="${file#"${REPO_ROOT}"/}"
 	while IFS= read -r entry; do
@@ -102,7 +108,7 @@ while IFS= read -r file; do
 			fail=1
 		fi
 	done < <(list_unsafe "${file}")
-done < <(find "${REPO_ROOT}/crates" -name '*.rs' -type f | sort)
+done < <(find "${REPO_ROOT}/crates" -name '*.rs' -type f -not -path "*/phodopus-gc-arena*" -not -path "*/phodopus-gc-arena-derive*" | sort)
 
 # --- 3. Forbidden trees ----------------------------------------------------
 while IFS= read -r file; do

@@ -8,14 +8,17 @@
 #
 # The version line restarts at 0.0.1. Milestones are v0.1.0, v0.2.0, ...; the
 # working tree between milestones carries the next milestone's pre-release
-# version. `shared-version` keeps the workspace and every member crate on one
-# version so the Git tag, release title, and manifests always agree.
+# version. `phodopus` and `phodopus-util` share one version so the Git tag,
+# release title, and manifests agree. The `phodopus-gc-arena` fork crates
+# intentionally track the upstream gc-arena version (0.5.3) under new names,
+# so `shared-version` is false and the two version groups are checked
+# separately by `just version-check` (CTX-0031).
 #
 # Rationale: the v0.1.0 tag was published while the manifests still declared
 # the pre-release `0.1.0-alpha.1`, so tag and crate disagreed. A published tag
 # is immutable; alignment moves forward to the next milestone instead of
 # rewriting history.
-shared-version = true
+shared-version = false
 consolidate-commits = true
 allow-branch = ["main"]
 
@@ -28,27 +31,29 @@ tag = true
 tag-name = "v{{version}}"
 tag-message = "Release {{version}}"
 
-# --- Packaging model (source-only) ------------------------------------------
+# --- Packaging model (registry-ready via fork) --------------------------------
 #
-# phodopus and phodopus-util set `publish = false` and are intentionally NOT
-# published to a registry. `gc-arena` is pinned to the revision
-# 5a7534b883b703f23cfb8c3cfdf033460aa77ea9, which is not published on
+# Option F (CTX-0031, for bitty CTX-1262): `gc-arena` was pinned to the git
+# revision 5a7534b883b703f23cfb8c3cfdf033460aa77ea9, which is not published on
 # crates.io; the crates.io release that shares its version number (0.5.3,
-# 2024-05-15) predates the pin (2024-07-23) and is API-incompatible, so a
-# registry version requirement cannot describe a buildable package. The
-# distribution model is therefore "build from the tagged source tree":
-#
-#   cargo build --locked --release --workspace
-#
-# The release workflow verifies version identity, produces a source archive
-# from the tagged tree, and attaches it with checksums. Registry publishing is
-# disabled here and enforced by the crate manifests' `publish = false`.
+# 2024-05-15) predates the pin (2024-07-23) and is API-incompatible, and the
+# later 0.6/0.7 releases are breaking rewrites. The renamed fork crates
+# `phodopus-gc-arena` and `phodopus-gc-arena-derive` (version 0.5.3 under new
+# names, library name `gc_arena` preserved) carry the pinned source verbatim
+# so `phodopus` keeps its Phase 3 quota accounting (`MetricsAlloc`,
+# `DynamicRootSet`, `Collect`, pacing) with only manifest changes.
+# `phodopus` and `phodopus-util` set `publish = true` (Phase A); the workspace
+# dependency uses a versioned path dep (`package = "phodopus-gc-arena"`) that
+# resolves to the registry once the owner publishes the fork, then the
+# `phodopus` crates. Actual `cargo publish` runs remain owner-only and
+# irreversible; this branch performs publish-PREP only (`--dry-run`).
 publish = false
 verify = false
 
-# Reproducible source archive is attached by the release workflow rather than
-# uploaded to a registry. Release verification (run by CI on every tag) is:
-#   - tag version == workspace version == every member crate version
+# Release verification (run by CI on every tag) is:
+#   - tag version == workspace version == phodopus/phodopus-util versions;
+#     fork crates share the upstream 0.5.3 as a separate group
 #   - `cargo build --locked --release --workspace` from the tagged tree
 #   - `cargo package --list --workspace --allow-dirty` (file-set manifest)
-#   - `cargo publish --dry-run` intentionally omitted: crates are non-publishable
+#   - `cargo publish --dry-run` for the fork crates and the phodopus crates
+#     (registry resolution; no publish is performed)
