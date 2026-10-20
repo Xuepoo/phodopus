@@ -22,6 +22,17 @@ struct GMatchInner {
     pattern_ast: Vec<lsonar::AstNode>,
     current_pos: usize,
     is_empty_pattern: bool,
+    /// Highest byte position whose candidate-start (attempt) cost has already
+    /// been charged to Fuel.
+    ///
+    /// A single `find_first_match` call is not preemptible below the engine's
+    /// recursion bound, so the search it may perform from the current cursor
+    /// is charged up front over the window that has not been paid for yet.
+    /// Positions stay paid once the cursor advances past them: charging the
+    /// whole remaining window again on every iteration made a linear scan
+    /// O(N^2) in Fuel (bitty#2285), while the engine never revisits a start
+    /// position it has already passed.
+    prepaid_until: usize,
 }
 
 impl GMatchInner {
@@ -56,6 +67,7 @@ impl GMatchInner {
             pattern_ast,
             current_pos,
             is_empty_pattern,
+            prepaid_until: current_pos,
         })
     }
 
@@ -99,18 +111,16 @@ impl GMatchInner {
         }
     }
 
-    /// Upper bound on the number of candidate start positions the search loop
-    /// in `pattern_engine::find_first_match` may try for this call.
-    fn attempt_bound(&self) -> usize {
-        self.bytes
-            .len()
-            .saturating_sub(self.current_pos)
-            .saturating_add(1)
+    /// Number of bytes in the window whose attempt cost has not yet been
+    /// charged for the next search.
+    fn unpaid_window(&self) -> usize {
+        self.bytes.len().saturating_sub(self.prepaid_until)
     }
 
-    /// Number of bytes remaining in the scan window for the next search.
-    fn scan_window(&self) -> usize {
-        self.bytes.len().saturating_sub(self.current_pos)
+    /// Marks the whole buffer as paid: every candidate start position the next
+    /// search may try now has its attempt cost charged.
+    fn mark_prepaid(&mut self) {
+        self.prepaid_until = self.bytes.len();
     }
 }
 
@@ -250,15 +260,18 @@ pub fn load_patterns<'gc>(ctx: Context<'gc>, string: &Table<'gc>) {
                         err.into_value(ctx)
                     })?;
                     // Each iteration performs one unanchored search. Charge the
-                    // remaining scan window, its attempt bound, and the produced
-                    // captures so repeated `gmatch` calls are accounted
-                    // proportionally to the documented model.
-                    let scan_window = inner.scan_window();
-                    let attempts = inner.attempt_bound();
+                    // attempt bound and scanned bytes for the positions this
+                    // iterator has not paid for yet, then mark them paid: the
+                    // engine never revisits a start position, so the whole
+                    // iteration is linear in the input instead of re-charging
+                    // the remaining window per match (bitty#2285).
+                    let unpaid = inner.unpaid_window();
                     exec.fuel().consume(
-                        sandbox::scanned_cost(scan_window)
-                            .saturating_add(sandbox::count_pattern_attempts(attempts)),
+                        sandbox::scanned_cost(unpaid).saturating_add(
+                            sandbox::count_pattern_attempts(unpaid.saturating_add(1)),
+                        ),
                     );
+                    inner.mark_prepaid();
                     match inner.next() {
                         Some(Ok(captures)) => {
                             let produced: usize = captures.iter().map(|c| c.len()).sum();
@@ -326,6 +339,10 @@ pub(crate) struct GsubSequence<'gc> {
     repl: ReplMode<'gc>,
     max_replacements: usize,
     last_pos: usize,
+    /// Highest byte position whose candidate-start (attempt) cost has already
+    /// been charged. Prepaid positions are never re-charged when the
+    /// replacement cursor advances past them (bitty#2285).
+    prepaid_until: usize,
     replacements: usize,
     #[collect(require_static)]
     result: Vec<u8>,
@@ -384,6 +401,7 @@ impl<'gc> GsubSequence<'gc> {
                 repl,
                 max_replacements,
                 last_pos: 0,
+                prepaid_until: 0,
                 replacements: 0,
                 result: Vec::new(),
             },
@@ -444,6 +462,7 @@ impl<'gc> Sequence<'gc> for GsubSequence<'gc> {
             repl,
             max_replacements,
             last_pos,
+            prepaid_until,
             replacements,
             result,
         } = &mut *seq;
@@ -458,8 +477,13 @@ impl<'gc> Sequence<'gc> for GsubSequence<'gc> {
         }
 
         while *replacements < *max_replacements {
-            let attempts = text_bytes.len().saturating_sub(*last_pos).saturating_add(1);
-            fuel.consume(sandbox::count_pattern_attempts(attempts));
+            // Charge the attempt bound for positions not paid for yet. The
+            // first search prepays the window it may scan; later replacements
+            // only pay for newly exposed positions, keeping the whole
+            // substitution linear in the input (bitty#2285).
+            let unpaid = text_bytes.len().saturating_sub(*prepaid_until);
+            fuel.consume(sandbox::count_pattern_attempts(unpaid.saturating_add(1)));
+            *prepaid_until = text_bytes.len();
 
             let match_opt = pattern_engine::find_first_match(pattern_ast, text_bytes, *last_pos)
                 .map_err(|err| Error::from_value(err.to_string().into_value(ctx)))?;

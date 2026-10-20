@@ -118,6 +118,10 @@ their work:
 - `string.find`/`string.match`/`gmatch` perform at most one unanchored search
   per call and charge `bytes + attempt bound`; the search engine call itself is
   not preemptible below its `MAX_RECURSION_DEPTH` bound (see Residual Bounds).
+  Iterator cost is paid per **position**, not per iteration: `gmatch` and
+  `gsub` prepay the window a search may scan and never re-charge a start
+  position the cursor has already passed, so a full scan is linear in the
+  input rather than quadratic in the number of matches.
 - `table.concat` copies the already-resident input values and charges one Fuel
   per output byte; its size is bounded by the sum of its inputs.
 - `load` (piecewise function chunks) charges one Fuel per assembled byte, in
@@ -140,9 +144,12 @@ charged up front rather than yielded out of:
 
 - A single `lsonar::engine::find_first_match` call: the engine recurses at most
   `MAX_RECURSION_DEPTH` (500) levels and walks at most the remaining input
-  window, so one call is bounded by `O(remaining_bytes)` attempts. `gsub`
-  charges `remaining_window + 1` attempts per call and yields between matches;
-  `find`/`match`/`gmatch` charge the same bound for their single call.
+  window, so one call is bounded by `O(remaining_bytes)` attempts. `find` and
+  `match` charge that bound for their single call. `gmatch` and `gsub` charge
+  it once for the positions not yet paid for: each start position carries its
+  attempt cost exactly once across the iterator's or substitution's lifetime,
+  so the total is linear in the input instead of the per-iteration remainder.
+  `gsub` yields between matches.
 - Rust standard library formatting of one `string.format` directive
   (`format_value`) is bounded by the parser's `MAX_WIDTH`/`MAX_PRECISION`
   (1000) limits and the input string length.
