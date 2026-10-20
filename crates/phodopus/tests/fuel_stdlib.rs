@@ -292,3 +292,117 @@ fn tonumber_single_argument_charges_scanned_bytes() -> Result<(), ExternError> {
 
     Ok(())
 }
+
+/// Builds a `<lines>`-line listing of the shape a tool plugin parses with
+/// `string.gmatch`: ~35-byte lines separated by newlines.
+fn gmatch_fixture(lines: usize) -> String {
+    let mut text = String::new();
+    for index in 0..lines {
+        text.push_str("  remotes/origin/feature/branch-");
+        text.push_str(&format!("{index:04}"));
+        text.push('\n');
+    }
+    text
+}
+
+/// Fuel consumed by the source with a single `step` slice, so scheduling cost
+/// is excluded from the measurement.
+fn consumed_by(lua: &mut Lua, source: &str) -> i32 {
+    let executor = start(lua, source);
+    run_to_completion_consumed(lua, &executor)
+}
+
+#[test]
+fn gmatch_charges_each_scan_position_once() -> Result<(), ExternError> {
+    let mut lua = Lua::core();
+
+    // Regression for bitty#2285: charging the whole remaining window on every
+    // `gmatch` iteration made a linear scan O(N^2) in Fuel. An 8 KiB listing
+    // (~230 lines) burned the full 10M RC-1 budget before, so a bounded
+    // consumer could never parse a capped tool output.
+    let small = gmatch_fixture(120);
+    let large = gmatch_fixture(240);
+    assert!(
+        large.len() > 8 * 1024,
+        "fixture must exceed the 8 KiB consumer cap"
+    );
+
+    let mut measure = |text: &str| {
+        let source = format!(
+            r#"
+            local text = string.rep("x", 0) .. {:?}
+            local count = 0
+            for line in string.gmatch(text, "[^\n]+") do
+              count = count + #line
+            end
+            return count
+            "#,
+            text
+        );
+        consumed_by(&mut lua, &source)
+    };
+
+    let small_cost = measure(&small);
+    let large_cost = measure(&large);
+
+    // Linear in bytes: doubling the input at most doubles the cost (plus a
+    // small constant). The pre-fix quadratic model tripled-to-quadrupled it.
+    assert!(
+        large_cost <= small_cost.saturating_mul(3),
+        "gmatch cost must grow linearly with input: {small_cost} -> {large_cost}"
+    );
+    assert!(
+        large_cost < 500_000,
+        "iterating an 8 KiB listing must stay far below the 10M RC-1 budget, got {large_cost}"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn gsub_charges_each_scan_position_once() -> Result<(), ExternError> {
+    let mut lua = Lua::core();
+
+    // Same defect in the resumable `gsub` loop: every replacement charged the
+    // remaining window again. Two thousand single-byte matches on a 4 KiB
+    // string used to cost tens of millions of Fuel.
+    let mut measure = |count: usize| {
+        let source = format!(
+            r#"
+            local text = string.rep("a", {count})
+            return (string.gsub(text, "a", "b"))
+            "#,
+        );
+        consumed_by(&mut lua, &source)
+    };
+
+    let small_cost = measure(1_000);
+    let large_cost = measure(2_000);
+    assert!(
+        large_cost <= small_cost.saturating_mul(3),
+        "gsub cost must grow linearly with match count: {small_cost} -> {large_cost}"
+    );
+    assert!(
+        large_cost < 500_000,
+        "2000 single-byte matches must stay far below the 10M RC-1 budget, got {large_cost}"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn runaway_lua_still_exhausts_a_small_budget() {
+    let mut lua = Lua::core();
+    let executor = start(&mut lua, "local n = 0 while true do n = n + 1 end");
+
+    for slice in 0..1_000 {
+        let done = lua.enter(|ctx| {
+            let mut fuel = phodopus::Fuel::with(1_024);
+            ctx.fetch(&executor).step(ctx, &mut fuel).unwrap()
+        });
+        assert!(
+            !done,
+            "a `while true` loop must never complete under a bounded budget (slice {slice})"
+        );
+    }
+}
