@@ -30,10 +30,10 @@ sptr = "0.3.2"
 tracing = { version = "0.1.37", optional = true, default-features = false }
 
 [dev-dependencies]
-rand = "0.8"
+rand = "0.9"
 # MSRV 1.85 ceiling: trybuild 1.0.120+ requires rustc 1.88, so pin to the
 # newest 1.85-compatible release for `cargo +1.85 check --workspace --all-targets`.
-trybuild = "=1.0.119"
+trybuild = "=1.0.122"
 
 [lints.rust]
 # Fork baseline: vendored upstream pin triggers rustc warnings on the current
