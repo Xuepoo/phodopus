@@ -806,8 +806,10 @@ fn estimate_concatenated_len<'gc>(
     let mut len = 0usize;
     for value in values {
         let value_len = match value {
-            // ilog10 panics for values <= 0
-            Value::Integer(i) => i.abs().max(1).ilog10() as usize + i.is_negative() as usize,
+            // ilog10 panics for values <= 0; unsigned_abs avoids i64::MIN overflow
+            Value::Integer(i) => {
+                i.unsigned_abs().max(1).ilog10() as usize + 1 + i.is_negative() as usize
+            }
             Value::Number(_n) => 10,
             Value::String(s) => s.as_bytes().len(),
             _ => return Ok(None),

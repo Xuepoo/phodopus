@@ -52,7 +52,7 @@ impl GMatchInner {
                 if idx > text_len { text_len + 1 } else { idx }
             }
             Some(i) if i < 0 => {
-                let abs_i = (-i) as usize;
+                let abs_i = i.unsigned_abs() as usize;
                 if abs_i > text_len {
                     0
                 } else {

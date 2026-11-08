@@ -339,3 +339,29 @@ do
     assert(is_err(function() return "" + 2 end))
     assert(" 0x0 " + 2 == 2)
 end
+
+-- Regression tests for mininteger/maxinteger/2^63/modf edge cases (#67):
+do
+    assert(math.abs(math.mininteger) == math.mininteger)
+    assert(math.tointeger(9223372036854775808.0) == nil)
+    assert(math.tointeger(-9223372036854775808.0) == math.mininteger)
+    assert(math.floor(math.maxinteger) == math.maxinteger)
+    assert(math.type(math.floor(math.maxinteger)) == "integer")
+    assert(math.ceil(math.maxinteger) == math.maxinteger)
+    assert(math.type(math.ceil(math.maxinteger)) == "integer")
+    assert(math.floor(9223372036854775808.0) == 9223372036854775808.0)
+    assert(math.type(math.floor(9223372036854775808.0)) == "float")
+    assert(math.ceil(9223372036854775808.0) == 9223372036854775808.0)
+    assert(math.type(math.ceil(9223372036854775808.0)) == "float")
+
+    local mi, mf = math.modf(math.maxinteger)
+    assert(mi == math.maxinteger and math.type(mi) == "integer" and mf == 0.0)
+    local hi, hf = math.modf(math.huge)
+    assert(hi == math.huge and hf == 0.0)
+    local nhi, nhf = math.modf(-math.huge)
+    assert(nhi == -math.huge and nhf == 0.0)
+    local nani, nanf = math.modf(0/0)
+    assert(is_nan(nani) and is_nan(nanf))
+    local bi, bf = math.modf(1e25)
+    assert(bi == 1e25 and math.type(bi) == "float" and bf == 0.0)
+end

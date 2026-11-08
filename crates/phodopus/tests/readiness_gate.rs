@@ -762,3 +762,42 @@ fn cross_platform_contracts_are_deterministic() -> Result<(), ExternError> {
     // that makes those runs comparable.
     Ok(())
 }
+
+#[test]
+fn utf8_codes_charges_linear_fuel_and_bounds_large_index() -> Result<(), ExternError> {
+    let measure = |len: usize| -> i32 {
+        let mut lua = Lua::core();
+        let script = format!(
+            "local s = string.rep('a', {len})\nlocal n = 0\nfor _, _ in utf8.codes(s) do n = n + 1 end\nreturn n"
+        );
+        let executor = start(&mut lua, &script);
+        let budget = i32::MAX;
+        lua.enter(|ctx| {
+            let mut fuel = Fuel::with(budget);
+            assert!(ctx.fetch(&executor).step(ctx, &mut fuel).unwrap());
+            budget - fuel.remaining()
+        })
+    };
+
+    let cost_200 = measure(200);
+    let cost_800 = measure(800);
+    assert!(
+        cost_800 < cost_200 * 6,
+        "utf8.codes fuel must scale linearly O(L), got cost(200)={cost_200}, cost(800)={cost_800}"
+    );
+
+    // Passing a huge out-of-bounds index directly to the utf8.codes iterator
+    // must not charge proportional to the index value.
+    let mut lua = Lua::core();
+    let executor = start(
+        &mut lua,
+        "local iter, s = utf8.codes('abc'); return iter(s, 1000000000) == nil",
+    );
+    let budget = 5_000;
+    lua.enter(|ctx| {
+        let mut fuel = Fuel::with(budget);
+        assert!(ctx.fetch(&executor).step(ctx, &mut fuel).unwrap());
+    });
+    assert!(lua.execute::<bool>(&executor)?);
+    Ok(())
+}

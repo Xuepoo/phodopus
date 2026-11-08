@@ -628,17 +628,30 @@ where
                         self.advance(2);
 
                         let mut u: u32 = 0;
+                        let mut has_digits = false;
                         loop {
                             if let Some(c) = self.peek(0)? {
                                 if c == b'}' {
+                                    if !has_digits {
+                                        return Err(LexError::HexDigitExpected);
+                                    }
                                     self.advance(1);
                                     break;
                                 } else if let Some(h) = from_hex_digit(c) {
-                                    u = (u << 4) | h as u32;
+                                    has_digits = true;
+                                    u = u
+                                        .checked_shl(4)
+                                        .filter(|_| (u >> 28) == 0)
+                                        .map(|shifted| shifted | h as u32)
+                                        .ok_or(LexError::EscapeUnicodeInvalid)?;
                                     self.advance(1);
+                                } else if !has_digits {
+                                    return Err(LexError::HexDigitExpected);
                                 } else {
                                     return Err(LexError::EscapeUnicodeEnd);
                                 }
+                            } else if !has_digits {
+                                return Err(LexError::HexDigitExpected);
                             } else {
                                 return Err(LexError::EscapeUnicodeEnd);
                             }
@@ -1027,6 +1040,18 @@ mod tests {
                 (str_token("exclaim!"), 7),
             ],
         );
+
+        let mut empty_unicode = Lexer::new(b"\"\\u{}\"", BasicInterner::default());
+        assert!(matches!(
+            empty_unicode.read_token(),
+            Err(LexError::HexDigitExpected)
+        ));
+
+        let mut overflow_unicode = Lexer::new(b"\"\\u{100000041}\"", BasicInterner::default());
+        assert!(matches!(
+            overflow_unicode.read_token(),
+            Err(LexError::EscapeUnicodeInvalid)
+        ));
     }
 
     #[test]
