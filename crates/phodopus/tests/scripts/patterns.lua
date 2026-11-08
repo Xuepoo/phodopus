@@ -340,3 +340,25 @@ do
     assert(string.match(bin, ".+") == bin)
     assert(string.match(string.char(200), "[\0-\255]") == string.char(200))
 end
+
+-- =========================================================================
+-- 13. Pattern backreferences (%1..%9) and gmatch mininteger init (#67)
+-- =========================================================================
+do
+    assert(string.match("aba", "(a)b%1") == "a")
+    assert(string.match("abc", "(a)b%1") == nil)
+    local s, e, c1 = string.find("bookkeeper", "(%a)%1")
+    assert(s == 2 and e == 3 and c1 == "o")
+
+    local doubled = {}
+    for ch in string.gmatch("bookkeeper", "(%a)%1") do
+        table.insert(doubled, ch)
+    end
+    assert(#doubled == 3 and doubled[1] == "o" and doubled[2] == "k" and doubled[3] == "e")
+
+    local chars = {}
+    for ch in string.gmatch("ab", ".", math.mininteger) do
+        table.insert(chars, ch)
+    end
+    assert(#chars == 2 and chars[1] == "a" and chars[2] == "b")
+end

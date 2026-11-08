@@ -122,22 +122,24 @@ pub fn load_utf8<'gc>(ctx: Context<'gc>) {
                 let bytes = s.as_bytes();
                 let len = bytes.len();
 
-                let n = if n <= 0 {
-                    0
+                let (n, scanned_step) = if n <= 0 {
+                    (0, usize::from(!bytes.is_empty()))
                 } else {
-                    let mut pos = (n as usize) - 1;
+                    let start = ((n as u64) - 1).min(len as u64) as usize;
+                    let mut pos = start;
                     if pos < len {
                         pos += 1;
                         while pos < len && iscont(bytes[pos]) {
                             pos += 1;
                         }
                     }
-                    pos
+                    (pos, pos - start)
                 };
 
-                // The scan above is bounded by the input length; charge it so
-                // repeated `gmatch`-style iteration is accounted.
-                exec.fuel().consume(sandbox::scanned_cost(n));
+                // Charge only the bytes scanned in this iteration step (avoiding
+                // O(L^2) cumulative charging across `for p, c in utf8.codes(s)`
+                // and bounding out-of-range `n` inputs).
+                exec.fuel().consume(sandbox::scanned_cost(scanned_step));
 
                 if n >= len {
                     stack.replace(ctx, (Value::Nil, Value::Nil));

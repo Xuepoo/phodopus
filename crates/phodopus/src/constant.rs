@@ -82,7 +82,7 @@ impl<S: AsRef<[u8]>> Constant<S> {
         match self.to_numeric() {
             Some(Self::Integer(a)) => Some(a),
             Some(Self::Number(a)) => {
-                if ((a as i64) as f64) == a {
+                if a >= (i64::MIN as f64) && a < (i64::MAX as f64) && ((a as i64) as f64) == a {
                     Some(a as i64)
                 } else {
                     None
@@ -132,7 +132,7 @@ impl<S: AsRef<[u8]>> Constant<S> {
                     let d = a.wrapping_div(b);
                     let r = a.wrapping_rem(b);
                     let d = if (r > 0 && b < 0) || (r < 0 && b > 0) {
-                        d - 1
+                        d.wrapping_sub(1)
                     } else {
                         d
                     };
@@ -151,12 +151,22 @@ impl<S: AsRef<[u8]>> Constant<S> {
                 if b == 0 {
                     None
                 } else {
-                    Some(Self::Integer(((a % b) + b) % b))
+                    let r = a.wrapping_rem(b);
+                    let m = if (r > 0 && b < 0) || (r < 0 && b > 0) {
+                        r.wrapping_add(b)
+                    } else {
+                        r
+                    };
+                    Some(Self::Integer(m))
                 }
             }
             (a, b) => {
                 let (a, b) = (a.to_number()?, b.to_number()?);
-                Some(Self::Number(((a % b) + b) % b))
+                let mut r = a % b;
+                if (r > 0.0 && b < 0.0) || (r < 0.0 && b > 0.0) {
+                    r += b;
+                }
+                Some(Self::Number(r))
             }
         }
     }

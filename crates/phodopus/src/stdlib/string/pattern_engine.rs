@@ -531,7 +531,7 @@ enum Pat {
     AnchorEnd,
     CaptureStart(usize),
     CaptureEnd(usize),
-    CaptureRef,
+    CaptureRef(usize),
     Quantified { body: Vec<Pat>, quant: Quantifier },
 }
 
@@ -553,7 +553,7 @@ fn convert_single(node: &AstNode, out: &mut Vec<Pat>) {
         AstNode::Frontier(charset) => out.push(Pat::Frontier(charset.clone())),
         AstNode::AnchorStart => out.push(Pat::AnchorStart),
         AstNode::AnchorEnd => out.push(Pat::AnchorEnd),
-        AstNode::CaptureRef(_) => out.push(Pat::CaptureRef),
+        AstNode::CaptureRef(n) => out.push(Pat::CaptureRef(n.saturating_sub(1))),
         AstNode::Capture { index, inner } => {
             let capture_index = index.saturating_sub(1);
             out.push(Pat::CaptureStart(capture_index));
@@ -748,7 +748,17 @@ fn match_recursive(pattern: &[Pat], mut state: State) -> Option<State> {
             }
             match_recursive(remaining, state)
         }
-        Pat::CaptureRef => None,
+        Pat::CaptureRef(index) => {
+            let range = state.captures.get(*index)?.clone()?;
+            let captured = state.input.get(range)?;
+            let end = state.current_pos.checked_add(captured.len())?;
+            if state.input.get(state.current_pos..end) == Some(captured) {
+                state.current_pos = end;
+                match_recursive(remaining, state)
+            } else {
+                None
+            }
+        }
         Pat::Balanced(open, close) => {
             if state.current_byte() != Some(*open) {
                 return None;

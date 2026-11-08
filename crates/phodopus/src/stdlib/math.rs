@@ -41,7 +41,7 @@ pub fn load_baseline<'gc>(ctx: Context<'gc>, math: Table<'gc>) {
         "abs",
         callback("abs", &ctx, |_, v: Value| {
             if let Value::Integer(i) = v {
-                Some(Value::Integer(i.abs()))
+                Some(Value::Integer(i.wrapping_abs()))
             } else {
                 Some(Value::Number(v.to_number()?.abs()))
             }
@@ -198,13 +198,25 @@ pub fn load_float<'gc>(ctx: Context<'gc>, math: Table<'gc>) {
     math.set_field(
         ctx,
         "ceil",
-        callback("ceil", &ctx, |_, v: f64| Some(to_int(v.ceil().into()))),
+        callback("ceil", &ctx, |_, v: Value| {
+            if let Value::Integer(i) = v {
+                Some(Value::Integer(i))
+            } else {
+                Some(to_int(v.to_number()?.ceil().into()))
+            }
+        }),
     );
 
     math.set_field(
         ctx,
         "floor",
-        callback("floor", &ctx, |_, v: f64| Some(to_int(v.floor().into()))),
+        callback("floor", &ctx, |_, v: Value| {
+            if let Value::Integer(i) = v {
+                Some(Value::Integer(i))
+            } else {
+                Some(to_int(v.to_number()?.floor().into()))
+            }
+        }),
     );
 
     math.set_field(
@@ -252,7 +264,21 @@ pub fn load_float<'gc>(ctx: Context<'gc>, math: Table<'gc>) {
     math.set_field(
         ctx,
         "modf",
-        callback("modf", &ctx, |_, f: f64| Some((f as i64, f % 1.0))),
+        callback("modf", &ctx, |_, v: Value| {
+            if let Value::Integer(i) = v {
+                Some((Value::Integer(i), Value::Number(0.0)))
+            } else {
+                let f = v.to_number()?;
+                if f.is_nan() {
+                    Some((Value::Number(f), Value::Number(f)))
+                } else if f.is_infinite() {
+                    Some((Value::Number(f), Value::Number(0.0_f64.copysign(f))))
+                } else {
+                    let trunc = f.trunc();
+                    Some((to_int(trunc.into()), Value::Number(f - trunc)))
+                }
+            }
+        }),
     );
 }
 

@@ -26,3 +26,14 @@ do
     local i, j = -16, 3
     assert(i // j == math.floor(i / j))
 end
+
+-- Regression tests for Constant::modulo / float Mod / i64::MIN concat (#67):
+do
+    assert((-9223372036854775807 - 1) % -1 == 0)
+    assert(9223372036854775806 % 9223372036854775807 == 9223372036854775806)
+    local a, b = 9223372036854775806, 9223372036854775807
+    assert(a % b == 9223372036854775806)
+    assert(1e308 % 1.5e308 == 1e308)
+    assert("1e308" % 1.5e308 == 1e308)
+    assert(tostring((-9223372036854775807 - 1) .. "") == "-9223372036854775808")
+end

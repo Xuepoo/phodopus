@@ -857,15 +857,27 @@ pub(super) fn run_vm<'gc>(
                         }
                     }
                     (Value::Number(a), Value::Number(b)) => {
-                        registers.stack_frame[dest.0 as usize] = Value::Number(((a % b) + b) % b);
+                        let mut r = a % b;
+                        if (r > 0.0 && b < 0.0) || (r < 0.0 && b > 0.0) {
+                            r += b;
+                        }
+                        registers.stack_frame[dest.0 as usize] = Value::Number(r);
                     }
                     (Value::Integer(a), Value::Number(b)) => {
                         let a = a as f64;
-                        registers.stack_frame[dest.0 as usize] = Value::Number(((a % b) + b) % b);
+                        let mut r = a % b;
+                        if (r > 0.0 && b < 0.0) || (r < 0.0 && b > 0.0) {
+                            r += b;
+                        }
+                        registers.stack_frame[dest.0 as usize] = Value::Number(r);
                     }
                     (Value::Number(a), Value::Integer(b)) => {
                         let b = b as f64;
-                        registers.stack_frame[dest.0 as usize] = Value::Number(((a % b) + b) % b);
+                        let mut r = a % b;
+                        if (r > 0.0 && b < 0.0) || (r < 0.0 && b > 0.0) {
+                            r += b;
+                        }
+                        registers.stack_frame[dest.0 as usize] = Value::Number(r);
                     }
                     _ => match meta_ops::modulo(ctx, left, right)? {
                         MetaResult::Value(v) => registers.stack_frame[dest.0 as usize] = v,
@@ -1027,7 +1039,7 @@ fn add_offset(pc: usize, offset: i16) -> usize {
     if offset > 0 {
         pc.checked_add(offset as usize).unwrap()
     } else if offset < 0 {
-        pc.checked_sub(-offset as usize).unwrap()
+        pc.checked_sub(offset.unsigned_abs() as usize).unwrap()
     } else {
         pc
     }
