@@ -103,3 +103,23 @@ do
         coroutine.yieldto(co)
     end) == false)
 end
+
+do
+    -- coroutine.isyieldable and coroutine.wrap
+    assert(coroutine.isyieldable() == false)
+
+    local wrapped = coroutine.wrap(function(x)
+        assert(coroutine.isyieldable() == true)
+        local y = coroutine.yield(x + 1)
+        return y * 2
+    end)
+
+    assert(wrapped(10) == 11)
+    assert(wrapped(21) == 42)
+
+    local err_wrapped = coroutine.wrap(function()
+        error("wrapped failure")
+    end)
+    local ok, err = pcall(err_wrapped)
+    assert(ok == false and err == "wrapped failure")
+end

@@ -65,3 +65,19 @@ do
     t.foo = 4
     assert(idx.foo == 4)
 end
+
+do
+    -- getmetatable on non-table values and __metatable protection
+    assert(getmetatable(42) == nil)
+    assert(getmetatable(true) == nil)
+    assert(getmetatable(nil) == nil)
+    assert(type(getmetatable("hello")) == "table")
+
+    local t = setmetatable({}, {
+        __metatable = "locked",
+        __name = "CustomWidget",
+    })
+    assert(getmetatable(t) == "locked")
+    assert(pcall(function() setmetatable(t, {}) end) == false)
+    assert(string.find(tostring(t), "^CustomWidget: 0x") == 1)
+end

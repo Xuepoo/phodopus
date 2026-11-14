@@ -362,3 +362,37 @@ do
     end
     assert(#chars == 2 and chars[1] == "a" and chars[2] == "b")
 end
+
+-- =========================================================================
+-- 14. string.gsub with function replacements (#69)
+-- =========================================================================
+do
+    -- Function replacement without explicit captures receives full match
+    local res1, n1 = string.gsub("hello world", "%w+", function(w)
+        return string.upper(w)
+    end)
+    assert(res1 == "HELLO WORLD" and n1 == 2)
+
+    -- Function replacement with multiple captures
+    local res2, n2 = string.gsub("a=1&b=2", "(%w+)=(%d+)", function(k, v)
+        return k .. ":" .. tostring(tonumber(v) * 10)
+    end)
+    assert(res2 == "a:10&b:20" and n2 == 2)
+
+    -- Returning nil or false keeps original match; returning integer/number converts to string
+    local res3, n3 = string.gsub("x y z", "%w+", function(w)
+        if w == "x" then return 100 end
+        if w == "y" then return false end
+        return nil
+    end)
+    assert(res3 == "100 y z" and n3 == 3)
+
+    -- Empty pattern with function replacement terminates cleanly
+    local res4, n4 = string.gsub("ab", "", function() return "-" end)
+    assert(res4 == "-a-b-" and n4 == 3)
+
+    -- Invalid replacement value from function raises error
+    assert(is_err(function()
+        return string.gsub("abc", "%a", function() return {} end)
+    end))
+end

@@ -10,23 +10,60 @@ from the upstream fork are preserved verbatim under
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-14
+
+### Added
+
+- `base`: `xpcall(f, msgh, ...)`, `rawequal(v1, v2)`, Lua 5.4 `getmetatable` /
+  `setmetatable` (`__metatable` protection and non-table support), `rawlen`
+  string length support, and metatable `__name` formatting in `tostring`.
+- `coroutine`: `coroutine.wrap(f)` and `coroutine.isyieldable([co])`.
+- `string`: function replacement support (`ReplMode::Function`) in
+  `string.gsub`, pattern backreferences (`%1`..`%9`), and byte-oriented pattern
+  matching for arbitrary byte sequences (`\128`..`\255`).
+- `stdlib`: fuel-preemptible `Sequence` implementations across `string`,
+  `table`, `utf8`, and `base` (`load`, `tonumber`, `table.concat`, `table.sort`,
+  `string.gsub`, `string.rep`, `string.pack`, `string.unpack`, `utf8.codes`,
+  `utf8.codepoint`, `utf8.len`, `utf8.offset`) with 16 MiB output ceilings and
+  hard memory quota enforcement.
+- `lua`: `RuntimeBuilder` (`Lua::builder()`) with `memory_limit`, `fuel_limit`,
+  and recoverable `OutOfMemory` / `FuelExhausted` errors (`Lua::execute_with_fuel`),
+  plus sandboxed `require` (`ModuleConfig`, preload/embedded/VFS/custom
+  searchers).
+- `crates/phodopus-gc-arena` and `crates/phodopus-gc-arena-derive`: renamed
+  registry fork of the pinned `gc-arena` revision `5a7534b` (upstream
+  version `0.5.3`) with full publish metadata, preserved `gc_arena`
+  library name, and scoped lint baselines; fork UI snapshots refreshed for
+  the current toolchain and `trybuild` pinned to the newest MSRV-compatible
+  release.
+
+### Changed
+
+- Aligned the workspace and both crate versions (`phodopus`, `phodopus-util`)
+  to `0.2.0`, marked both publish-ready (`publish = true`), and split version
+  identity into two consistent groups checked by `just version-check` and
+  `.github/workflows/release.yml` (`phodopus` + `phodopus-util` at `0.2.0`,
+  `phodopus-gc-arena` + `phodopus-gc-arena-derive` at `0.5.3`).
+
+### Fixed
+
+- `table`: prevented `2.0^63` (`i64::MAX as f64`) from falsely canonicalizing to
+  `math.maxinteger` in `RawTable::f64_to_i64`.
+- `vm` / `constant` / `meta_ops`: implemented exact Lua 5.4 `i64` vs `f64`
+  equality and ordering comparisons (`==`, `<`, `<=`) without precision loss,
+  and supported negative shift counts in `<<` and `>>` (`a << -b == a >> b`,
+  `a >> -b == a << b`).
+- `string`: fixed quantified-inner capture backtracking (`^%s*(.-)%s*$`),
+  `string.gmatch` `math.mininteger` `init` overflow, and `string.gsub` linear
+  candidate-window Fuel accounting.
+
+## [0.2.0-alpha.1] - 2026-10-05
+
 ### Changed
 
 - Aligned the workspace and both crate versions to `0.2.0-alpha.1`, the
   pre-release of the `v0.2.0` milestone, so the Git tag, release title, and
   manifest version are identical.
-- Marked `phodopus` and `phodopus-util` publish-ready (`publish = true`,
-  Phase A for bitty crates.io install) and replaced the unpublishable
-  `gc-arena` git pin with the renamed registry fork `phodopus-gc-arena`
-  (Option F): version `0.5.3` under new names, library name `gc_arena`
-  preserved, pinned upstream source verbatim, so Phase 3 quota accounting
-  (`MetricsAlloc`, `DynamicRootSet`, `Collect`, pacing) is unchanged and
-  only manifests change. The workspace dependency is a versioned path dep
-  that resolves to the registry once the owner publishes the fork crates.
-- Split version identity into two consistent groups checked by
-  `just version-check`: `phodopus` and `phodopus-util` share the workspace
-  version, while `phodopus-gc-arena` and `phodopus-gc-arena-derive` share
-  the upstream `0.5.3`; `release.toml` records the fork exception.
 
 ### Added
 
@@ -35,12 +72,6 @@ from the upstream fork are preserved verbatim under
 - `.github/workflows/release.yml`: verifies tag/manifest version identity,
   builds from the tagged tree, and attaches a reproducible source archive plus
   a package file manifest and checksums to the release.
-- `crates/phodopus-gc-arena` and `crates/phodopus-gc-arena-derive`: renamed
-  registry fork of the pinned `gc-arena` revision `5a7534b` (upstream
-  version `0.5.3`) with full publish metadata, preserved `gc_arena`
-  library name, and scoped lint baselines; fork UI snapshots refreshed for
-  the current toolchain and `trybuild` pinned to the newest MSRV-compatible
-  release.
 
 ## [0.1.0] - 2026-09-20
 

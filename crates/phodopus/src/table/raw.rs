@@ -777,9 +777,18 @@ impl<'gc> Key<'gc> {
 
 // Returns the closest i64 to a given f64 such that casting the i64 back to an f64 results in an
 // equal value, if such an integer exists.
+//
+// Note that `i64::MAX as f64` rounds up to `2.0^63` (`9223372036854775808.0`), which saturates back
+// to `i64::MAX` under `as i64` in Rust. Checking `n < (i64::MAX as f64)` prevents `2.0^63` from
+// falsely canonicalizing to `i64::MAX`.
 fn f64_to_i64(n: f64) -> Option<i64> {
-    let i = n as i64;
-    if i as f64 == n { Some(i) } else { None }
+    if n >= (i64::MIN as f64) && n < (i64::MAX as f64) {
+        let i = n as i64;
+        if i as f64 == n {
+            return Some(i);
+        }
+    }
+    None
 }
 
 // Parameter must not be NaN, should return a bit-pattern which is always equal when the

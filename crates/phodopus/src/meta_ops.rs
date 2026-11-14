@@ -1,6 +1,6 @@
 use std::io::Write;
 
-use gc_arena::Collect;
+use gc_arena::{Collect, Gc};
 use thiserror::Error;
 
 use crate::async_callback::{AsyncSequence, Locals};
@@ -444,12 +444,59 @@ pub fn tostring<'gc>(
                 args: [v],
             }));
         }
+
+        if let Value::String(name) = metatable.get_value(ctx, "__name") {
+            let formatted = match v {
+                Value::Table(t) => {
+                    format!("{}: {:p}", name.display_lossy(), Gc::as_ptr(t.into_inner()))
+                }
+                Value::UserData(u) => {
+                    format!("{}: {:p}", name.display_lossy(), Gc::as_ptr(u.into_inner()))
+                }
+                _ => v.display().to_string(),
+            };
+            return Ok(MetaResult::Value(ctx.intern(formatted.as_bytes()).into()));
+        }
     }
 
     Ok(match v {
         v @ Value::String(_) => MetaResult::Value(v),
         v => MetaResult::Value(ctx.intern(v.display().to_string().as_bytes()).into()),
     })
+}
+
+/// Compares two Lua values for raw equality without invoking metamethods (`rawequal`).
+pub fn raw_equal<'gc>(lhs: Value<'gc>, rhs: Value<'gc>) -> bool {
+    match (lhs, rhs) {
+        (Value::Nil, Value::Nil) => true,
+        (Value::Nil, _) => false,
+
+        (Value::Boolean(a), Value::Boolean(b)) => a == b,
+        (Value::Boolean(_), _) => false,
+
+        (Value::Integer(a), Value::Integer(b)) => a == b,
+        (Value::Integer(a), Value::Number(b)) => crate::constant::int_eq_float(a, b),
+        (Value::Integer(_), _) => false,
+
+        (Value::Number(a), Value::Number(b)) => a == b,
+        (Value::Number(a), Value::Integer(b)) => crate::constant::int_eq_float(b, a),
+        (Value::Number(_), _) => false,
+
+        (Value::String(a), Value::String(b)) => a == b,
+        (Value::String(_), _) => false,
+
+        (Value::Function(a), Value::Function(b)) => a == b,
+        (Value::Function(_), _) => false,
+
+        (Value::Thread(a), Value::Thread(b)) => a == b,
+        (Value::Thread(_), _) => false,
+
+        (Value::Table(a), Value::Table(b)) => a == b,
+        (Value::Table(_), _) => false,
+
+        (Value::UserData(a), Value::UserData(b)) => a == b,
+        (Value::UserData(_), _) => false,
+    }
 }
 
 pub fn equal<'gc>(
@@ -465,11 +512,15 @@ pub fn equal<'gc>(
         (Value::Boolean(_), _) => Value::Boolean(false).into(),
 
         (Value::Integer(a), Value::Integer(b)) => Value::Boolean(a == b).into(),
-        (Value::Integer(a), Value::Number(b)) => Value::Boolean(a as f64 == b).into(),
+        (Value::Integer(a), Value::Number(b)) => {
+            Value::Boolean(crate::constant::int_eq_float(a, b)).into()
+        }
         (Value::Integer(_), _) => Value::Boolean(false).into(),
 
         (Value::Number(a), Value::Number(b)) => Value::Boolean(a == b).into(),
-        (Value::Number(a), Value::Integer(b)) => Value::Boolean(b as f64 == a).into(),
+        (Value::Number(a), Value::Integer(b)) => {
+            Value::Boolean(crate::constant::int_eq_float(b, a)).into()
+        }
         (Value::Number(_), _) => Value::Boolean(false).into(),
 
         (Value::String(a), Value::String(b)) => Value::Boolean(a == b).into(),

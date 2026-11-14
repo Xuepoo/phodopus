@@ -54,6 +54,19 @@ function test7()
            is_err(function() return 2.2 >> 3 end)
 end
 
+function test8()
+    local a = 16
+    local b = -3
+    return 16 << -3 == 2 and
+           a << b == 2 and
+           2 >> -3 == 16 and
+           2 >> b == 16 and
+           1 << -64 == 0 and
+           1 >> -64 == 0 and
+           1 << math.mininteger == 0 and
+           1 >> math.mininteger == 0
+end
+
 assert(
     test1() and
     test2() and
@@ -61,5 +74,6 @@ assert(
     test4() and
     test5() and
     test6() and
-    test7()
+    test7() and
+    test8()
 )

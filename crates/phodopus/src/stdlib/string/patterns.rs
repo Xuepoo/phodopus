@@ -6,8 +6,8 @@ use std::sync::Mutex;
 use gc_arena::Collect;
 
 use crate::{
-    BoxSequence, Callback, CallbackReturn, Context, Error, Execution, IntoValue, Sequence,
-    SequencePoll, Stack, String, Table, Value,
+    BoxSequence, Callback, CallbackReturn, Context, Error, Execution, Function, IntoValue,
+    Sequence, SequencePoll, Stack, String, Table, Value,
 };
 
 use super::super::sandbox;
@@ -312,6 +312,7 @@ pub fn load_patterns<'gc>(ctx: Context<'gc>, string: &Table<'gc>) {
 enum ReplMode<'gc> {
     String(#[collect(require_static)] Vec<u8>),
     Table(Table<'gc>),
+    Function(Function<'gc>),
 }
 
 /// A resumable implementation of `string.gsub`.
@@ -344,6 +345,8 @@ pub(crate) struct GsubSequence<'gc> {
     /// replacement cursor advances past them (bitty#2285).
     prepaid_until: usize,
     replacements: usize,
+    #[collect(require_static)]
+    pending_call_match: Option<(usize, usize)>,
     #[collect(require_static)]
     result: Vec<u8>,
 }
@@ -378,11 +381,7 @@ impl<'gc> GsubSequence<'gc> {
                 ReplMode::String(repl.display().to_string().into_bytes())
             }
             Value::Table(t) => ReplMode::Table(t),
-            Value::Function(_) => {
-                return Err("function replacement currently unsupported in gsub"
-                    .into_value(ctx)
-                    .into());
-            }
+            Value::Function(f) => ReplMode::Function(f),
             _ => {
                 return Err(format!(
                     "bad argument #3 to 'gsub' (string/function/table expected, got {})",
@@ -403,6 +402,7 @@ impl<'gc> GsubSequence<'gc> {
                 last_pos: 0,
                 prepaid_until: 0,
                 replacements: 0,
+                pending_call_match: None,
                 result: Vec::new(),
             },
         )))
@@ -443,6 +443,22 @@ fn push_replacement(out: &mut Vec<u8>, chunk: &[u8]) -> Result<(), StdString> {
     Ok(())
 }
 
+fn replacement_bytes_from_value<'gc>(
+    ctx: Context<'gc>,
+    val: Value<'gc>,
+    full_match: &[u8],
+) -> Result<Vec<u8>, Error<'gc>> {
+    match val {
+        Value::String(s) => Ok(s.as_bytes().to_vec()),
+        Value::Integer(i) => Ok(i.to_string().into_bytes()),
+        Value::Number(n) => Ok(n.to_string().into_bytes()),
+        Value::Nil | Value::Boolean(false) => Ok(full_match.to_vec()),
+        _ => Err(format!("invalid replacement value (a {})", val.type_name())
+            .into_value(ctx)
+            .into()),
+    }
+}
+
 impl<'gc> Sequence<'gc> for GsubSequence<'gc> {
     fn poll(
         mut self: Pin<&mut Self>,
@@ -464,6 +480,7 @@ impl<'gc> Sequence<'gc> for GsubSequence<'gc> {
             last_pos,
             prepaid_until,
             replacements,
+            pending_call_match,
             result,
         } = &mut *seq;
 
@@ -474,6 +491,30 @@ impl<'gc> Sequence<'gc> for GsubSequence<'gc> {
             stack.into_back(ctx, interned);
             stack.into_back(ctx, 0i64);
             return Ok(SequencePoll::Return);
+        }
+
+        if let Some((match_start, match_end)) = pending_call_match.take() {
+            let val = stack.get(0);
+            stack.clear();
+            let full_match = &text_bytes[match_start..match_end];
+            let replacement = replacement_bytes_from_value(ctx, val, full_match)?;
+            push_checked(result, &replacement, fuel, ctx)?;
+
+            *last_pos = match_end;
+            *replacements += 1;
+
+            if match_start == match_end {
+                if *last_pos >= text_bytes.len() {
+                    *max_replacements = *replacements;
+                } else {
+                    push_checked(result, &text_bytes[*last_pos..*last_pos + 1], fuel, ctx)?;
+                    *last_pos += 1;
+                }
+            }
+
+            if !fuel.should_continue() && *replacements < *max_replacements {
+                return Ok(SequencePoll::Pending);
+            }
         }
 
         while *replacements < *max_replacements {
@@ -521,20 +562,22 @@ impl<'gc> Sequence<'gc> for GsubSequence<'gc> {
                     };
                     let key = ctx.intern(key_bytes);
                     let val = table.get_value(ctx, key);
-                    match val {
-                        Value::String(s) => s.as_bytes().to_vec(),
-                        Value::Integer(i) => i.to_string().into_bytes(),
-                        Value::Number(n) => n.to_string().into_bytes(),
-                        Value::Nil | Value::Boolean(false) => full_match.to_vec(),
-                        _ => {
-                            return Err(format!(
-                                "invalid replacement value (a {})",
-                                val.type_name()
-                            )
-                            .into_value(ctx)
-                            .into());
+                    replacement_bytes_from_value(ctx, val, full_match)?
+                }
+                ReplMode::Function(func) => {
+                    stack.clear();
+                    if captures_ref.is_empty() {
+                        stack.into_back(ctx, ctx.intern(full_match));
+                    } else {
+                        for cap in &captures_ref {
+                            stack.into_back(ctx, ctx.intern(cap));
                         }
                     }
+                    *pending_call_match = Some((match_range.start, match_range.end));
+                    return Ok(SequencePoll::Call {
+                        bottom: 0,
+                        function: *func,
+                    });
                 }
             };
             push_checked(result, &replacement, fuel, ctx)?;
