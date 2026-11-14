@@ -3,8 +3,8 @@ use std::pin::Pin;
 use gc_arena::Collect;
 
 use crate::{
-    BoxSequence, Callback, CallbackReturn, Context, Error, Execution, IntoValue, MetaMethod,
-    Sequence, SequencePoll, Stack, String, Table, TypeError, Value, Variadic,
+    BoxSequence, Callback, CallbackReturn, Context, Error, Execution, Function, IntoValue,
+    MetaMethod, Sequence, SequencePoll, Stack, String, Table, TypeError, Value, Variadic,
     error::LuaError,
     meta_ops::{self, MetaResult},
     table::NextValue,
@@ -138,6 +138,44 @@ pub fn load_base<'gc>(ctx: Context<'gc>) {
     );
 
     ctx.set_global(
+        "xpcall",
+        Callback::from_fn(&ctx, move |ctx, _, mut stack| {
+            let msgh = meta_ops::call(ctx, stack.get(1))?;
+            let target = stack.get(0);
+            if stack.len() >= 2 {
+                stack.drain(0..2);
+            } else {
+                stack.clear();
+            }
+            match meta_ops::call(ctx, target) {
+                Ok(function) => Ok(CallbackReturn::Call {
+                    function,
+                    then: Some(BoxSequence::new(
+                        &ctx,
+                        XPCall {
+                            msgh,
+                            in_handler: false,
+                        },
+                    )),
+                }),
+                Err(err) => {
+                    stack.replace(ctx, Error::from(err));
+                    Ok(CallbackReturn::Call {
+                        function: msgh,
+                        then: Some(BoxSequence::new(
+                            &ctx,
+                            XPCall {
+                                msgh,
+                                in_handler: true,
+                            },
+                        )),
+                    })
+                }
+            }
+        }),
+    );
+
+    ctx.set_global(
         "type",
         Callback::from_fn(&ctx, |ctx, _, mut stack| {
             if stack.is_empty() {
@@ -178,6 +216,18 @@ pub fn load_base<'gc>(ctx: Context<'gc>) {
     );
 
     ctx.set_global(
+        "rawequal",
+        Callback::from_fn(&ctx, |ctx, _, mut stack| {
+            if stack.len() < 2 {
+                return Err("Missing argument(s) to rawequal".into_value(ctx).into());
+            }
+            let eq = meta_ops::raw_equal(stack.get(0), stack.get(1));
+            stack.replace(ctx, eq);
+            Ok(CallbackReturn::Return)
+        }),
+    );
+
+    ctx.set_global(
         "rawget",
         Callback::from_fn(&ctx, |ctx, _, mut stack| {
             let (table, key): (Table, Value) = stack.consume(ctx)?;
@@ -189,8 +239,18 @@ pub fn load_base<'gc>(ctx: Context<'gc>) {
     ctx.set_global(
         "rawlen",
         Callback::from_fn(&ctx, |ctx, _, mut stack| {
-            let table: Table = stack.consume(ctx)?;
-            stack.replace(ctx, table.length());
+            let len = match stack.get(0) {
+                Value::Table(t) => t.length(),
+                Value::String(s) => s.len(),
+                v => {
+                    return Err(TypeError {
+                        expected: "table or string",
+                        found: v.type_name(),
+                    }
+                    .into());
+                }
+            };
+            stack.replace(ctx, len);
             Ok(CallbackReturn::Return)
         }),
     );
@@ -208,14 +268,33 @@ pub fn load_base<'gc>(ctx: Context<'gc>) {
     ctx.set_global(
         "getmetatable",
         Callback::from_fn(&ctx, |ctx, _, mut stack| {
-            if let Value::Table(t) = stack.get(0) {
-                stack.replace(ctx, t.metatable());
-                Ok(CallbackReturn::Return)
-            } else {
-                Err("'getmetatable' can only be used on table types"
-                    .into_value(ctx)
-                    .into())
+            if stack.is_empty() {
+                return Err("Missing argument to getmetatable".into_value(ctx).into());
             }
+            let mt = match stack.get(0) {
+                Value::Table(t) => t.metatable(),
+                Value::UserData(u) => u.metatable(),
+                Value::String(_) => {
+                    let smt = ctx.string_metatable();
+                    if matches!(smt.next(Value::Nil), NextValue::Last) {
+                        None
+                    } else {
+                        Some(smt)
+                    }
+                }
+                _ => None,
+            };
+            if let Some(mt) = mt {
+                let protected = mt.get_value(ctx, "__metatable");
+                if !protected.is_nil() {
+                    stack.replace(ctx, protected);
+                } else {
+                    stack.replace(ctx, mt);
+                }
+            } else {
+                stack.replace(ctx, Value::Nil);
+            }
+            Ok(CallbackReturn::Return)
         }),
     );
 
@@ -223,6 +302,11 @@ pub fn load_base<'gc>(ctx: Context<'gc>) {
         "setmetatable",
         Callback::from_fn(&ctx, |ctx, _, mut stack| {
             let (t, mt): (Table, Option<Table>) = stack.consume(ctx)?;
+            if t.metatable()
+                .is_some_and(|cur_mt| !cur_mt.get_value(ctx, "__metatable").is_nil())
+            {
+                return Err("cannot change a protected metatable".into_value(ctx).into());
+            }
             t.set_metatable(&ctx, mt);
             stack.replace(ctx, t);
             Ok(CallbackReturn::Return)
@@ -382,5 +466,50 @@ impl<'gc> Sequence<'gc> for PCall {
     ) -> Result<SequencePoll<'gc>, Error<'gc>> {
         stack.replace(ctx, (false, error));
         Ok(SequencePoll::Return)
+    }
+}
+
+#[derive(Collect)]
+#[collect(no_drop)]
+struct XPCall<'gc> {
+    msgh: Function<'gc>,
+    in_handler: bool,
+}
+
+impl<'gc> Sequence<'gc> for XPCall<'gc> {
+    fn poll(
+        self: Pin<&mut Self>,
+        ctx: Context<'gc>,
+        _exec: Execution<'gc, '_>,
+        mut stack: Stack<'gc, '_>,
+    ) -> Result<SequencePoll<'gc>, Error<'gc>> {
+        if self.in_handler {
+            let msg = stack.get(0);
+            stack.replace(ctx, (false, msg));
+        } else {
+            stack.into_front(ctx, true);
+        }
+        Ok(SequencePoll::Return)
+    }
+
+    fn error(
+        mut self: Pin<&mut Self>,
+        ctx: Context<'gc>,
+        _exec: Execution<'gc, '_>,
+        error: Error<'gc>,
+        mut stack: Stack<'gc, '_>,
+    ) -> Result<SequencePoll<'gc>, Error<'gc>> {
+        let this = self.as_mut().get_mut();
+        if this.in_handler {
+            stack.replace(ctx, (false, "error in error handling"));
+            Ok(SequencePoll::Return)
+        } else {
+            this.in_handler = true;
+            stack.replace(ctx, error);
+            Ok(SequencePoll::Call {
+                bottom: 0,
+                function: this.msgh,
+            })
+        }
     }
 }

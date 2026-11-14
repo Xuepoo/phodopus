@@ -30,10 +30,12 @@
 - Phase 2 (COMPLETE): Sandboxed module system (`require`) — pluggable searcher
   chain, preloaded core modules, an empty default `package.path`, and
   capability-constrained VFS roots.
-- Phase 3 (IN PROGRESS): hard memory quotas are implemented (see the
-  Sandboxing & Fuel boundary below); the broader Fuel-policy work plus
-  host-agnostic async bridge (`HostOp::Pending`) and Bitty host ABI
-  integration remain open.
+- Phase 3 (COMPLETE): hard memory quotas (`RuntimeBuilder::memory_limit`),
+  total Fuel budgets (`RuntimeBuilder::fuel_limit`, `Lua::execute_with_fuel`),
+  recoverable `OutOfMemory` / `FuelExhausted` errors, and fuel-preemptible
+  stdlib sequences with 16 MiB output ceilings are implemented (see the
+  Sandboxing & Fuel boundary below). Phases 4–5 (host-agnostic async bridge
+  `HostOp::Pending` and Bitty host ABI integration) remain open.
   `docs/architecture/roadmap.md` is the single implementation truth for phase
   status.
 - Do not introduce Bitty-specific abstractions or hardcoded async runtime

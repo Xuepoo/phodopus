@@ -203,24 +203,17 @@ impl<S: AsRef<[u8]>> Constant<S> {
     }
 
     pub fn shift_left(&self, rhs: &Self) -> Option<Self> {
-        let rhs = rhs.to_integer()?;
-        if rhs < 0 {
-            return None;
-        }
-        let rhs = rhs.try_into().ok().unwrap_or(u32::MAX);
-        Some(Self::Integer(
-            self.to_integer()?.checked_shl(rhs).unwrap_or(0),
-        ))
+        Some(Self::Integer(int_shl(
+            self.to_integer()?,
+            rhs.to_integer()?,
+        )))
     }
 
     pub fn shift_right(&self, rhs: &Self) -> Option<Self> {
-        let rhs = rhs.to_integer()?;
-        if rhs < 0 {
-            return None;
-        }
-        let lhs = self.to_integer()? as u64;
-        let rhs = rhs.try_into().ok().unwrap_or(u32::MAX);
-        Some(Self::Integer(lhs.checked_shr(rhs).unwrap_or(0) as i64))
+        Some(Self::Integer(int_shr(
+            self.to_integer()?,
+            rhs.to_integer()?,
+        )))
     }
 
     // Comparison operators
@@ -234,11 +227,11 @@ impl<S: AsRef<[u8]>> Constant<S> {
             (Self::Boolean(_), _) => false,
 
             (Self::Integer(a), Self::Integer(b)) => a == b,
-            (Self::Integer(a), Self::Number(b)) => *a as f64 == *b,
+            (Self::Integer(a), Self::Number(b)) => int_eq_float(*a, *b),
             (Self::Integer(_), _) => false,
 
             (Self::Number(a), Self::Number(b)) => a == b,
-            (Self::Number(a), Self::Integer(b)) => *b as f64 == *a,
+            (Self::Number(a), Self::Integer(b)) => int_eq_float(*b, *a),
             (Self::Number(_), _) => false,
 
             (Self::String(a), Self::String(b)) => a.as_ref() == b.as_ref(),
@@ -249,9 +242,9 @@ impl<S: AsRef<[u8]>> Constant<S> {
     pub fn less_than(&self, rhs: &Self) -> Option<bool> {
         Some(match (self, rhs) {
             (Self::Integer(a), Self::Integer(b)) => a < b,
-            (Self::Integer(a), Self::Number(b)) => (*a as f64) < *b,
+            (Self::Integer(a), Self::Number(b)) => int_lt_float(*a, *b),
             (Self::Number(a), Self::Number(b)) => a < b,
-            (Self::Number(a), Self::Integer(b)) => *a < *b as f64,
+            (Self::Number(a), Self::Integer(b)) => float_lt_int(*a, *b),
             (Self::String(a), Self::String(b)) => a.as_ref() < b.as_ref(),
             _ => return None,
         })
@@ -260,13 +253,78 @@ impl<S: AsRef<[u8]>> Constant<S> {
     pub fn less_equal(&self, rhs: &Self) -> Option<bool> {
         Some(match (self, rhs) {
             (Self::Integer(a), Self::Integer(b)) => a <= b,
-            (Self::Integer(a), Self::Number(b)) => (*a as f64) <= *b,
+            (Self::Integer(a), Self::Number(b)) => int_le_float(*a, *b),
             (Self::Number(a), Self::Number(b)) => a <= b,
-            (Self::Number(a), Self::Integer(b)) => *a <= *b as f64,
+            (Self::Number(a), Self::Integer(b)) => float_le_int(*a, *b),
             (Self::String(a), Self::String(b)) => a.as_ref() <= b.as_ref(),
             _ => return None,
         })
     }
+}
+
+/// Lua 5.4 bitwise left shift (`a << b`), where negative `b` shifts right by `-b`.
+pub(crate) fn int_shl(lhs: i64, rhs: i64) -> i64 {
+    if rhs >= 0 {
+        let shift = u32::try_from(rhs).unwrap_or(u32::MAX);
+        lhs.checked_shl(shift).unwrap_or(0)
+    } else {
+        let shift = u32::try_from(rhs.unsigned_abs()).unwrap_or(u32::MAX);
+        ((lhs as u64).checked_shr(shift).unwrap_or(0)) as i64
+    }
+}
+
+/// Lua 5.4 logical right shift (`a >> b`), where negative `b` shifts left by `-b`.
+pub(crate) fn int_shr(lhs: i64, rhs: i64) -> i64 {
+    if rhs >= 0 {
+        let shift = u32::try_from(rhs).unwrap_or(u32::MAX);
+        ((lhs as u64).checked_shr(shift).unwrap_or(0)) as i64
+    } else {
+        let shift = u32::try_from(rhs.unsigned_abs()).unwrap_or(u32::MAX);
+        lhs.checked_shl(shift).unwrap_or(0)
+    }
+}
+
+/// Exact Lua 5.4 equality between an `i64` and an `f64` without precision loss.
+pub(crate) fn int_eq_float(i: i64, f: f64) -> bool {
+    f >= (i64::MIN as f64) && f < (i64::MAX as f64) && (f as i64) == i && (i as f64) == f
+}
+
+/// Exact Lua 5.4 `i < f` comparison between an `i64` and an `f64`.
+pub(crate) fn int_lt_float(i: i64, f: f64) -> bool {
+    if f.is_nan() {
+        false
+    } else if f >= (i64::MAX as f64) {
+        true
+    } else if f <= (i64::MIN as f64) {
+        false
+    } else {
+        let fi = f as i64;
+        i < fi || (i == fi && (fi as f64) < f)
+    }
+}
+
+/// Exact Lua 5.4 `i <= f` comparison between an `i64` and an `f64`.
+pub(crate) fn int_le_float(i: i64, f: f64) -> bool {
+    if f.is_nan() {
+        false
+    } else if f >= (i64::MAX as f64) {
+        true
+    } else if f < (i64::MIN as f64) {
+        false
+    } else {
+        let fi = f as i64;
+        i < fi || (i == fi && (fi as f64) <= f)
+    }
+}
+
+/// Exact Lua 5.4 `f < i` comparison between an `f64` and an `i64`.
+pub(crate) fn float_lt_int(f: f64, i: i64) -> bool {
+    !f.is_nan() && !int_le_float(i, f)
+}
+
+/// Exact Lua 5.4 `f <= i` comparison between an `f64` and an `i64`.
+pub(crate) fn float_le_int(f: f64, i: i64) -> bool {
+    !f.is_nan() && !int_lt_float(i, f)
 }
 
 impl<S: AsRef<[u8]>> PartialEq for Constant<S> {

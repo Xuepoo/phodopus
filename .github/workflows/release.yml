@@ -53,7 +53,7 @@ jobs:
           fi
           if [[ -z "$version" ]]; then
             version="$(cargo metadata --no-deps --format-version 1 \
-              | python3 -c 'import json,sys; print(json.load(sys.stdin)["packages"][0]["version"])')"
+              | python3 -c 'import json,sys; p=json.load(sys.stdin)["packages"]; print(next(x["version"] for x in p if x["name"]=="phodopus"))')"
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "release version: $version"
@@ -64,7 +64,7 @@ jobs:
         run: |
           set -euo pipefail
           workspace="$(cargo metadata --no-deps --format-version 1 \
-            | python3 -c 'import json,sys; p=json.load(sys.stdin)["packages"]; versions={x["version"] for x in p}; assert len(versions)==1, versions; print(versions.pop())')"
+            | python3 -c 'import json,sys; p={x["name"]:x["version"] for x in json.load(sys.stdin)["packages"]}; v={p["phodopus"],p["phodopus-util"]}; gc={p["phodopus-gc-arena"],p["phodopus-gc-arena-derive"]}; assert len(v)==1, v; assert len(gc)==1, gc; print(v.pop())')"
           if [ "$workspace" != "$VERSION" ]; then
             echo "::error::workspace version $workspace does not match release $VERSION"
             exit 1

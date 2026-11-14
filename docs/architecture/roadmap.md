@@ -14,7 +14,7 @@ sidebar_order: 12
 > Status: **accepted**. This document is the single implementation truth for
 > phase status across the repository. Every other document — root and crate
 > READMEs, the architecture overview, and integration records — reconciles to
-> the statuses recorded here. Phases 0, 1, 1.5, and 2 are complete; Phases 3–5 are
+> the statuses recorded here. Phases 0, 1, 1.5, 2, and 3 are complete; Phases 4–5 are
 > open. Completion of a phase records absorbed, tested source, not production
 > sandbox readiness.
 
@@ -48,7 +48,7 @@ sidebar_order: 12
                                |
                                v
 +-----------------------------------------------------------------+
-| Phase 3: Hard Memory Quotas & Sandboxing Ceilings               |
+| Phase 3: Hard Memory Quotas & Sandboxing Ceilings   [COMPLETED] |
 | - RuntimeBuilder::memory_limit, Fuel policies, OOM handling     |
 +-----------------------------------------------------------------+
                                |
@@ -115,9 +115,9 @@ Absorbed upstream community PR #91 with sandbox-first security hardening:
 - [x] Support embedded preloaded modules (`package.preload`) for core built-ins.
 - [x] Implement capability-constrained virtual filesystem (VFS) resolvers, preventing arbitrary traversal of the host OS filesystem.
 
-### Phase 3: Hard Memory Quotas & Sandboxing Ceilings
+### Phase 3: Hard Memory Quotas & Sandboxing Ceilings (Completed)
 
-- Integrate hard memory limit support directly into the arena allocator:
+- [x] Integrate hard memory limit support directly into the arena allocator:
 
   ```rust
   let lua = Lua::builder()
@@ -126,8 +126,8 @@ Absorbed upstream community PR #91 with sandbox-first security hardening:
       .build();
   ```
 
-- Implement clean, recoverable `OutOfMemory` errors without panics or VM corruption.
-- Formalize preemption and cancellation policies.
+- [x] Implement clean, recoverable `OutOfMemory` errors without panics or VM corruption.
+- [x] Formalize preemption and cancellation policies across the VM and standard library.
 
 ### Phase 4: Host-Agnostic Asynchronous Bridge
 

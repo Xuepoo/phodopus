@@ -372,3 +372,29 @@ do
         }
     ))
 end
+
+do
+    -- 2.0^63 must not collide with math.maxinteger as a table key
+    local t = {}
+    local two63 = 9223372036854775808.0
+    t[math.maxinteger] = "max_int"
+    t[two63] = "two63_float"
+    assert(t[math.maxinteger] == "max_int")
+    assert(t[two63] == "two63_float")
+
+    -- -2.0^63 equals math.mininteger and shares the same key
+    local neg_two63 = -9223372036854775808.0
+    t[math.mininteger] = "min_int"
+    assert(t[neg_two63] == "min_int")
+
+    -- rawequal and rawlen
+    local a = setmetatable({}, { __eq = function() return true end })
+    local b = setmetatable({}, { __eq = function() return true end })
+    assert(a == b)
+    assert(not rawequal(a, b))
+    assert(rawequal(a, a))
+    assert(rawequal(1, 1.0))
+    assert(not rawequal(math.maxinteger, two63))
+    assert(rawlen("hello") == 5)
+    assert(rawlen({ 10, 20, 30 }) == 3)
+end

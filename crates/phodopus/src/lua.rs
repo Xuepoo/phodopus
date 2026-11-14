@@ -481,16 +481,17 @@ impl Lua {
         const FUEL_PER_GC: i32 = 4096;
 
         loop {
+            // Between steps (and before the first step if chunk compilation or a prior failed
+            // execution left the arena at or above the ceiling) the arena is not mutably borrowed,
+            // so a collection is legal. Do it eagerly when the hard quota is at or above its
+            // ceiling so garbage is reclaimed before the next allocation is considered.
+            self.collect_on_quota_pressure();
+
             let mut fuel = Fuel::with(FUEL_PER_GC);
 
             if self.enter(|ctx| ctx.fetch(executor).step(ctx, &mut fuel))? {
                 break;
             }
-
-            // Between steps the arena is not mutably borrowed, so a collection is legal. Do it
-            // eagerly when the hard quota is at or above its ceiling so garbage is reclaimed
-            // before the next allocation is considered.
-            self.collect_on_quota_pressure();
         }
 
         Ok(())
@@ -533,6 +534,8 @@ impl Lua {
         let initial = fuel.remaining();
         let mut remaining = initial;
         loop {
+            self.collect_on_quota_pressure();
+
             // Step with a bounded slice (carrying no more than the total budget still available),
             // then subtract what this slice consumed from the running total. This keeps the
             // configured budget a total rather than per-slice while still letting collection run
@@ -552,7 +555,6 @@ impl Lua {
                     limit: initial,
                 })));
             }
-            self.collect_on_quota_pressure();
         }
 
         self.enforce_memory_limit().map_err(RuntimeError::new)?;

@@ -142,6 +142,33 @@ function test17()
         "0x10" + "4" == 20
 end
 
+function test18()
+    local max_i = math.maxinteger
+    local min_i = math.mininteger
+    local two63 = 9223372036854775808.0
+    local neg_two63 = -9223372036854775808.0
+    local i53 = (1 << 53)
+    local f53 = i53 + 0.0
+    return
+        max_i ~= two63 and
+        two63 ~= max_i and
+        max_i < two63 and
+        max_i <= two63 and
+        not (two63 < max_i) and
+        not (two63 <= max_i) and
+        min_i == neg_two63 and
+        neg_two63 == min_i and
+        min_i <= neg_two63 and
+        neg_two63 <= min_i and
+        not (min_i < neg_two63) and
+        not (neg_two63 < min_i) and
+        (i53 + 1) ~= f53 and
+        (i53 + 1) > f53 and
+        f53 < (i53 + 1) and
+        (i53 - 1) < f53 and
+        f53 > (i53 - 1)
+end
+
 assert(
     test1() and
     test2() and
@@ -159,5 +186,6 @@ assert(
     test14() and
     test15() and
     test16() and
-    test17()
+    test17() and
+    test18()
 )

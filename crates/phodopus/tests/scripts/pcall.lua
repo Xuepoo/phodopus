@@ -41,3 +41,24 @@ do
     local s4 = coroutine.status(co)
     assert(e4 == true and r4 == nil and s4 == "dead")
 end
+
+do
+    local ok, a, b = xpcall(function(x, y) return x + y, x * y end, function(e) return e end, 3, 4)
+    assert(ok == true and a == 7 and b == 12)
+
+    local ok2, msg2 = xpcall(
+        function(x) error("boom:" .. x) end,
+        function(err) return "handled:" .. tostring(err) end,
+        "42"
+    )
+    assert(ok2 == false and msg2 == "handled:boom:42")
+
+    local ok3, msg3 = xpcall(
+        function() error("initial") end,
+        function() error("secondary") end
+    )
+    assert(ok3 == false and msg3 == "error in error handling")
+
+    -- Non-callable handler raises an error
+    assert(pcall(function() xpcall(function() end, 123) end) == false)
+end

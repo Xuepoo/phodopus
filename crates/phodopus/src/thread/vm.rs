@@ -462,12 +462,12 @@ pub(super) fn run_vm<'gc>(
                         }
                     }
                     (Value::Integer(a), Value::Number(b)) => {
-                        if (a as f64 == b) == skip_if {
+                        if crate::constant::int_eq_float(a, b) == skip_if {
                             *registers.pc += 1;
                         }
                     }
                     (Value::Number(a), Value::Integer(b)) => {
-                        if (b as f64 == a) == skip_if {
+                        if crate::constant::int_eq_float(b, a) == skip_if {
                             *registers.pc += 1;
                         }
                     }
@@ -539,12 +539,12 @@ pub(super) fn run_vm<'gc>(
                         }
                     }
                     (Value::Integer(a), Value::Number(b)) => {
-                        if ((a as f64) < b) == skip_if {
+                        if crate::constant::int_lt_float(a, b) == skip_if {
                             *registers.pc += 1;
                         }
                     }
                     (Value::Number(a), Value::Integer(b)) => {
-                        if (a < (b as f64)) == skip_if {
+                        if crate::constant::float_lt_int(a, b) == skip_if {
                             *registers.pc += 1;
                         }
                     }
@@ -591,12 +591,12 @@ pub(super) fn run_vm<'gc>(
                         }
                     }
                     (Value::Integer(a), Value::Number(b)) => {
-                        if ((a as f64) <= b) == skip_if {
+                        if crate::constant::int_le_float(a, b) == skip_if {
                             *registers.pc += 1;
                         }
                     }
                     (Value::Number(a), Value::Integer(b)) => {
-                        if (a <= (b as f64)) == skip_if {
+                        if crate::constant::float_le_int(a, b) == skip_if {
                             *registers.pc += 1;
                         }
                     }
@@ -981,10 +981,9 @@ pub(super) fn run_vm<'gc>(
                 let left = get_rc(&registers.stack_frame, &current_prototype.constants, left);
                 let right = get_rc(&registers.stack_frame, &current_prototype.constants, right);
                 match (left, right) {
-                    (Value::Integer(a), Value::Integer(b)) if b >= 0 => {
-                        let shift = (b as u64).try_into().unwrap_or(u32::MAX);
+                    (Value::Integer(a), Value::Integer(b)) => {
                         registers.stack_frame[dest.0 as usize] =
-                            Value::Integer(a.checked_shl(shift).unwrap_or(0));
+                            Value::Integer(crate::constant::int_shl(a, b));
                     }
                     _ => match meta_ops::shift_left(ctx, left, right)? {
                         MetaResult::Value(v) => registers.stack_frame[dest.0 as usize] = v,
@@ -1005,10 +1004,9 @@ pub(super) fn run_vm<'gc>(
                 let left = get_rc(&registers.stack_frame, &current_prototype.constants, left);
                 let right = get_rc(&registers.stack_frame, &current_prototype.constants, right);
                 match (left, right) {
-                    (Value::Integer(a), Value::Integer(b)) if b >= 0 => {
-                        let shift = (b as u64).try_into().unwrap_or(u32::MAX);
+                    (Value::Integer(a), Value::Integer(b)) => {
                         registers.stack_frame[dest.0 as usize] =
-                            Value::Integer(((a as u64).checked_shr(shift).unwrap_or(0)) as i64);
+                            Value::Integer(crate::constant::int_shr(a, b));
                     }
                     _ => match meta_ops::shift_right(ctx, left, right)? {
                         MetaResult::Value(v) => registers.stack_frame[dest.0 as usize] = v,

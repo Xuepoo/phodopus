@@ -90,5 +90,45 @@ pub fn load_coroutine<'gc>(ctx: Context<'gc>) {
         }),
     );
 
+    coroutine.set_field(
+        ctx,
+        "isyieldable",
+        Callback::from_fn(&ctx, |ctx, exec, mut stack| {
+            let opt_thread: Option<Thread> = stack.consume(ctx)?;
+            let current_thread = exec.current_thread();
+            let yieldable = match opt_thread {
+                Some(t) => {
+                    if t == current_thread.thread {
+                        !current_thread.is_main
+                    } else {
+                        true
+                    }
+                }
+                None => !current_thread.is_main,
+            };
+            stack.replace(ctx, yieldable);
+            Ok(CallbackReturn::Return)
+        }),
+    );
+
+    coroutine.set_field(
+        ctx,
+        "wrap",
+        Callback::from_fn(&ctx, |ctx, _, mut stack| {
+            let thread = Thread::new(ctx);
+            thread
+                .start_suspended(&ctx, meta_ops::call(ctx, stack.get(0))?)
+                .unwrap();
+            let wrapper = Callback::from_fn_with(&ctx, thread, |thread, _, _, _| {
+                Ok(CallbackReturn::Resume {
+                    thread: *thread,
+                    then: None,
+                })
+            });
+            stack.replace(ctx, wrapper);
+            Ok(CallbackReturn::Return)
+        }),
+    );
+
     ctx.set_global("coroutine", coroutine);
 }

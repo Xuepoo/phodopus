@@ -50,18 +50,18 @@ likely not be implemented due to differences between Phodopus and PUC-Lua.
 | 🔵     | `pairs(t)`                                                     | By default, PUC-Lua returns `iter, table, nil`, whereas Phodopus returns `iter, table`.                                                  |       |
 | 🔵     | `pcall(f, args...)`                                            |                                                                                                                                        |       |
 | 🔵     | `print(args...)`                                               |                                                                                                                                        |       |
-| ⚫️    | `rawequal(v1, v2)`                                             |                                                                                                                                        |       |
+| 🔵     | `rawequal(v1, v2)`                                             |                                                                                                                                        |       |
 | 🔵     | `rawget(table, index)`                                         |                                                                                                                                        |       |
 | 🔵    | `rawlen(v)`                                                    |                                                                                                                                        |       |
 | 🔵     | `rawset(table, index, value)`                                  |                                                                                                                                        |       |
 | 🔵     | `select(index, args...)`                                       |                                                                                                                                        |       |
 | 🔵     | `setmetatable(table, metatable)`                               |                                                                                                                                        |       |
 | 🔵    | `tonumber(e[, base])`                                          |                                                                                                                                        |       |
-| 🟡     | `tostring(v)`                                                  | Phodopus does not use the metatable field `__name` by default, while PUC-Lua does.                                                      |       |
+| 🔵     | `tostring(v)`                                                  | Supports `__tostring` and metatable `__name`; default format without `__name` uses `<type 0x...>`.                                     |       |
 | 🔵     | `type(v)`                                                      |                                                                                                                                        |       |
 | 🔵    | `_VERSION` (value)                                             |                                                                                                                                        |       |
 | ⚫️    | `warn(msg, args...)`                                           |                                                                                                                                        |       |
-| ⚫️    | `xpcall(f, msgh, args...)`                                     |                                                                                                                                        |       |
+| 🔵     | `xpcall(f, msgh, args...)`                                     |                                                                                                                                        |       |
 
 [^0]: Hedging b/c I don't know PUC-Lua like my reverse palm, and there might be differing behaviors if you poke both implementations to death, but that's not what this document is for.
 
@@ -71,11 +71,11 @@ likely not be implemented due to differences between Phodopus and PUC-Lua.
 | ------ | ----------------------- | ----------- | ----- |
 | ⚫️️   | `close(co)`             |             |       |
 | 🔵     | `create(f)`             |             |       |
-| ⚫️️   | `isyieldable([co])`     |             |       |
+| 🔵     | `isyieldable([co])`     |             |       |
 | 🔵     | `resume(co[, vals...])` |             |       |
 | 🔵     | `running()`             |             |       |
 | 🔵     | `status(co)`            |             |       |
-| ⚫️️   | `wrap(f)`               |             |       |
+| 🔵     | `wrap(f)`               |             |       |
 | 🔵     | `yield(args...)`        |             |       |
 
 ## Package
@@ -102,7 +102,7 @@ likely not be implemented due to differences between Phodopus and PUC-Lua.
 | 🔵   | `find(s, pattern[, init, plain])` |                                             | Implemented via native Lua pattern engine (`lsonar`) |
 | 🔵   | `format(formatstring, args...)`   |                                             |                                                      |
 | 🔵   | `gmatch(s, pattern[, init])`      |                                             | Stateful iterator callback; supports optional `init` |
-| 🔵   | `gsub(s, pattern, repl[, n])`     | Function replacements currently unsupported | Supports string and table replacements               |
+| 🔵   | `gsub(s, pattern, repl[, n])`     |                                             | Supports string, table, and function replacements    |
 | 🔵     | `len(s)`                          |                                             |                                                      |
 | 🔵   | `lower(s)`                        |                                             |                                                      |
 | 🔵   | `match(s, pattern[, init])`       |                                             | Implemented via native Lua pattern engine (`lsonar`) |
